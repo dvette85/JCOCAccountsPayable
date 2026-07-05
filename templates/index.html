@@ -1,0 +1,1470 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AP System • Johnson Church of Christ</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&amp;family=Roboto+Mono:wght@400;500&amp;display=swap');
+    
+    :root {
+      --primary: #1e40af;
+    }
+    
+    body { font-family: 'Inter', system_ui, sans-serif; }
+    .mono { font-family: 'Roboto Mono', ui-monospace, monospace; }
+    
+    .nav-active { 
+      background-color: #1e40af; 
+      color: white; 
+      border-radius: 6px; 
+    }
+    
+    .section { display: none; }
+    .section.active { display: block; }
+    
+    .table-container { max-height: 520px; overflow-y: auto; }
+    
+    .status-pending { @apply bg-amber-100 text-amber-800 px-2.5 py-0.5 rounded-full text-xs font-semibold; }
+    .status-approved { @apply bg-emerald-100 text-emerald-800 px-2.5 py-0.5 rounded-full text-xs font-semibold; }
+    .status-rejected { @apply bg-red-100 text-red-800 px-2.5 py-0.5 rounded-full text-xs font-semibold; }
+    
+    .ap-card {
+      transition: transform .1s ease, box-shadow .1s ease;
+    }
+    .ap-card:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 10px 15px -3px rgb(0 0 0 / 0.05), 0 4px 6px -4px rgb(0 0 0 / 0.05);
+    }
+
+    .modal {
+      animation: fadeInScale 0.15s ease-out forwards;
+    }
+    
+    @keyframes fadeInScale {
+      from { opacity: 0; transform: scale(0.96); }
+      to { opacity: 1; transform: scale(1); }
+    }
+
+    .progress-step {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .step-dot {
+      width: 22px;
+      height: 22px;
+      border-radius: 9999px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 11px;
+      font-weight: 700;
+    }
+    .step-dot.done { background: #166534; color: white; }
+    .step-dot.current { background: #1e40af; color: white; }
+    .step-dot.pending { background: #e5e7eb; color: #6b7280; }
+
+    .nav-item {
+      transition: all 0.1s ease;
+    }
+    .nav-item:hover:not(.nav-active) {
+      background-color: #f1f5f9;
+    }
+
+    .filter-input {
+      transition: all .1s;
+    }
+    .filter-input:focus {
+      box-shadow: 0 0 0 3px rgba(30, 64, 175, 0.1);
+    }
+
+    .data-table th {
+      position: sticky;
+      top: 0;
+      background: #f8fafc;
+      z-index: 10;
+    }
+
+    .mobile-card {
+      border: 1px solid #e5e7eb;
+    }
+  </style>
+</head>
+<body class="bg-slate-50 text-slate-800">
+  <!-- Top Header -->
+  <header class="bg-white border-b border-slate-200 sticky top-0 z-50">
+    <div class="max-w-screen-2xl mx-auto">
+      <div class="px-4 sm:px-6 py-3 flex items-center justify-between">
+        <div class="flex items-center gap-x-3">
+          <div class="w-10 h-10 bg-blue-800 text-white flex items-center justify-center rounded-xl shadow-inner">
+            <i class="fa-solid fa-file-invoice-dollar text-2xl"></i>
+          </div>
+          <div>
+            <div class="font-semibold text-xl tracking-tight">Johnson Church of Christ</div>
+            <div class="text-[10px] text-blue-700 -mt-1 font-medium tracking-[1px]">ACCOUNTS PAYABLE</div>
+          </div>
+        </div>
+
+        <div class="flex items-center gap-x-2 sm:gap-x-4">
+          <!-- Stats -->
+          <div class="hidden md:flex items-center gap-x-4 text-sm">
+            <div class="flex items-center gap-x-1.5 px-3 py-1 bg-slate-100 rounded-full">
+              <i class="fa-solid fa-file-lines text-blue-600"></i>
+              <span id="stat-total" class="font-semibold">0</span>
+              <span class="text-slate-500 text-xs">requests</span>
+            </div>
+            <div class="flex items-center gap-x-1.5 px-3 py-1 bg-amber-100 text-amber-700 rounded-full text-xs font-medium">
+              <span id="stat-pending">0</span> pending
+            </div>
+          </div>
+
+          <!-- Mobile nav toggle -->
+          <button onclick="toggleMobileNav()" 
+                  class="md:hidden w-9 h-9 flex items-center justify-center rounded-lg border border-slate-200 hover:bg-slate-100">
+            <i class="fa-solid fa-bars"></i>
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Desktop Nav -->
+    <div class="border-t border-slate-100 bg-white hidden md:block">
+      <div class="max-w-screen-2xl mx-auto px-6">
+        <nav class="flex gap-x-1 py-2 text-sm">
+          <button onclick="showSection('status')" 
+                  class="nav-item nav-active px-4 py-1.5 flex items-center gap-x-2 text-sm font-medium" id="nav-status">
+            <i class="fa-solid fa-list-check w-4"></i>
+            <span>Status &amp; Lookup</span>
+          </button>
+          <button onclick="openNewRequest()" 
+                  class="nav-item px-4 py-1.5 flex items-center gap-x-2 text-sm font-medium" id="nav-new-request">
+            <i class="fa-solid fa-plus w-4"></i>
+            <span>New Request</span>
+          </button>
+          <button onclick="showSection('gl')" 
+                  class="nav-item px-4 py-1.5 flex items-center gap-x-2 text-sm font-medium" id="nav-gl">
+            <i class="fa-solid fa-book w-4"></i>
+            <span>General Ledger</span>
+          </button>
+          <button onclick="showSection('users')" 
+                  class="nav-item px-4 py-1.5 flex items-center gap-x-2 text-sm font-medium" id="nav-users">
+            <i class="fa-solid fa-users w-4"></i>
+            <span>Users</span>
+          </button>
+          <button onclick="showSection('emaillog')" 
+                  class="nav-item px-4 py-1.5 flex items-center gap-x-2 text-sm font-medium" id="nav-emaillog">
+            <i class="fa-solid fa-envelope w-4"></i>
+            <span>Email Log</span>
+          </button>
+        </nav>
+      </div>
+    </div>
+  </header>
+
+  <!-- Mobile Nav -->
+  <div id="mobile-nav" class="hidden md:hidden border-b bg-white px-4 py-2">
+    <div class="flex flex-col text-sm">
+      <button onclick="showSection('status');toggleMobileNav()" class="text-left py-2.5 px-3 hover:bg-slate-50 flex items-center gap-2 rounded">
+        <i class="fa-solid fa-list-check w-5 text-blue-700"></i> Status &amp; Lookup
+      </button>
+      <button onclick="openNewRequest();toggleMobileNav()" class="text-left py-2.5 px-3 hover:bg-slate-50 flex items-center gap-2 rounded">
+        <i class="fa-solid fa-plus w-5 text-blue-700"></i> New Request
+      </button>
+      <button onclick="showSection('gl');toggleMobileNav()" class="text-left py-2.5 px-3 hover:bg-slate-50 flex items-center gap-2 rounded">
+        <i class="fa-solid fa-book w-5 text-blue-700"></i> General Ledger
+      </button>
+      <button onclick="showSection('users');toggleMobileNav()" class="text-left py-2.5 px-3 hover:bg-slate-50 flex items-center gap-2 rounded">
+        <i class="fa-solid fa-users w-5 text-blue-700"></i> Users
+      </button>
+      <button onclick="showSection('emaillog');toggleMobileNav()" class="text-left py-2.5 px-3 hover:bg-slate-50 flex items-center gap-2 rounded">
+        <i class="fa-solid fa-envelope w-5 text-blue-700"></i> Email Log
+      </button>
+    </div>
+  </div>
+
+  <div class="max-w-screen-2xl mx-auto px-4 sm:px-6 py-5">
+    
+    <!-- STATUS & LOOKUP -->
+    <div id="section-status" class="section active">
+      <div class="flex items-end justify-between mb-4">
+        <div>
+          <h1 class="text-2xl font-semibold tracking-tight">Status &amp; Lookup</h1>
+          <p class="text-slate-500 text-sm">View requests, track approval progress, filter and export</p>
+        </div>
+        <button onclick="exportCSV()" 
+                class="px-4 py-2 flex items-center gap-x-2 bg-white border border-slate-300 hover:bg-slate-50 text-sm font-medium rounded-lg shadow-sm">
+          <i class="fa-solid fa-download"></i>
+          <span class="hidden sm:inline">Export CSV</span>
+        </button>
+      </div>
+
+      <!-- Filters -->
+      <div class="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm mb-4">
+        <div class="grid grid-cols-2 md:grid-cols-5 gap-3">
+          <div>
+            <label class="block text-xs font-medium text-slate-500 mb-1">Date From</label>
+            <input type="date" id="filter-date-from" class="filter-input w-full border border-slate-300 rounded-lg px-3 py-1.5 text-sm">
+          </div>
+          <div>
+            <label class="block text-xs font-medium text-slate-500 mb-1">Date To</label>
+            <input type="date" id="filter-date-to" class="filter-input w-full border border-slate-300 rounded-lg px-3 py-1.5 text-sm">
+          </div>
+          <div>
+            <label class="block text-xs font-medium text-slate-500 mb-1">Account #</label>
+            <input type="text" id="filter-account" placeholder="e.g. 5900" 
+                   class="filter-input w-full border border-slate-300 rounded-lg px-3 py-1.5 text-sm">
+          </div>
+          <div>
+            <label class="block text-xs font-medium text-slate-500 mb-1">Status</label>
+            <select id="filter-status" class="filter-input w-full border border-slate-300 rounded-lg px-3 py-1.5 text-sm bg-white">
+              <option value="All">All</option>
+              <option value="Pending">Pending</option>
+              <option value="Approved">Approved</option>
+              <option value="Rejected">Rejected</option>
+            </select>
+          </div>
+          <div class="col-span-2 md:col-span-1">
+            <label class="block text-xs font-medium text-slate-500 mb-1">Search</label>
+            <div class="relative">
+              <input type="text" id="filter-search" placeholder="Vendor, desc, ID..." 
+                     class="filter-input w-full border border-slate-300 rounded-lg pl-9 py-1.5 text-sm"
+                     onkeyup="if (event.key === 'Enter') loadRequests()">
+              <i class="fa-solid fa-search absolute left-3 top-2.5 text-slate-400"></i>
+            </div>
+          </div>
+        </div>
+        
+        <div class="flex gap-2 mt-3">
+          <button onclick="loadRequests()" 
+                  class="px-5 py-1.5 bg-blue-800 hover:bg-blue-900 transition-colors text-white rounded-lg text-sm font-semibold flex items-center gap-2">
+            <i class="fa-solid fa-filter"></i>
+            <span>Apply Filters</span>
+          </button>
+          <button onclick="clearFilters()" 
+                  class="px-4 py-1.5 bg-white border border-slate-300 hover:bg-slate-50 rounded-lg text-sm font-medium">
+            Clear
+          </button>
+        </div>
+      </div>
+
+      <!-- Table / Cards -->
+      <div class="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+        <!-- Desktop Table -->
+        <div class="hidden md:block table-container">
+          <table class="w-full text-sm data-table">
+            <thead>
+              <tr class="border-b text-left text-xs font-semibold text-slate-600">
+                <th class="px-4 py-3 w-12">ID</th>
+                <th class="px-4 py-3">Date</th>
+                <th class="px-4 py-3">Vendor</th>
+                <th class="px-4 py-3">Amount</th>
+                <th class="px-4 py-3">GL Account</th>
+                <th class="px-4 py-3">Requested By</th>
+                <th class="px-4 py-3">Status / Progress</th>
+                <th class="px-4 py-3 w-28 text-right">Actions</th>
+              </tr>
+            </thead>
+            <tbody id="requests-table-body" class="divide-y text-sm"></tbody>
+          </table>
+        </div>
+
+        <!-- Mobile Cards -->
+        <div id="requests-mobile" class="md:hidden divide-y"></div>
+      </div>
+    </div>
+
+    <!-- NEW REQUEST / EDIT -->
+    <div id="section-new-request" class="section">
+      <div class="max-w-2xl">
+        <h1 class="text-2xl font-semibold tracking-tight mb-1" id="form-title">New Request</h1>
+        <p class="text-slate-500 mb-5 text-sm">Enter invoice details. The system will route to approvers automatically upon save.</p>
+
+        <div class="bg-white border border-slate-200 rounded-2xl p-6 shadow-sm">
+          <input type="hidden" id="request-id">
+
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-5">
+            <div>
+              <label class="text-xs font-semibold text-slate-600">Vendor / Payee *</label>
+              <input id="req-vendor" type="text" class="mt-1 w-full border border-slate-300 focus:border-blue-600 px-3 py-2 rounded-lg" placeholder="ABC Supply Co." required>
+            </div>
+            <div>
+              <label class="text-xs font-semibold text-slate-600">Invoice Number</label>
+              <input id="req-invoice-number" type="text" class="mt-1 w-full border border-slate-300 focus:border-blue-600 px-3 py-2 rounded-lg" placeholder="INV-12345">
+            </div>
+
+            <div>
+              <label class="text-xs font-semibold text-slate-600">Invoice Date *</label>
+              <input id="req-invoice-date" type="date" class="mt-1 w-full border border-slate-300 focus:border-blue-600 px-3 py-2 rounded-lg" required>
+            </div>
+            <div>
+              <label class="text-xs font-semibold text-slate-600">Amount *</label>
+              <div class="relative mt-1">
+                <div class="absolute left-3 top-2.5 text-slate-500">$</div>
+                <input id="req-amount" type="number" step="0.01" class="pl-7 w-full border border-slate-300 focus:border-blue-600 px-3 py-2 rounded-lg" placeholder="0.00" required>
+              </div>
+            </div>
+
+            <div class="sm:col-span-2">
+              <label class="text-xs font-semibold text-slate-600">Description / Purpose *</label>
+              <textarea id="req-description" rows="2" class="mt-1 w-full border border-slate-300 focus:border-blue-600 px-3 py-2 rounded-lg" placeholder="Purpose of expense or invoice details..."></textarea>
+            </div>
+
+            <div>
+              <label class="text-xs font-semibold text-slate-600">General Ledger Account *</label>
+              
+              <!-- Searchable GL Account selector -->
+              <div class="relative mt-1" id="gl-search-container">
+                <input 
+                  type="text" 
+                  id="req-gl-search" 
+                  class="w-full border border-slate-300 focus:border-blue-600 px-3 py-2 rounded-lg text-sm" 
+                  placeholder="Type account # or name (e.g. 5900 or Building)" 
+                  autocomplete="off"
+                  required
+                >
+                <input type="hidden" id="req-gl">
+                
+                <!-- Dropdown results -->
+                <div id="gl-dropdown" 
+                     class="hidden absolute z-50 mt-1 w-full max-h-60 overflow-auto bg-white border border-slate-300 rounded-lg shadow-lg text-sm">
+                  <!-- Populated dynamically by JS -->
+                </div>
+              </div>
+              <div class="text-[10px] text-slate-400 mt-0.5">Click or type to search/select GL account (account # or name).</div>
+            </div>
+
+            <div>
+              <label class="text-xs font-semibold text-slate-600">Requested By *</label>
+              <select id="req-requested-by" class="mt-1 w-full border border-slate-300 focus:border-blue-600 px-3 py-2 rounded-lg bg-white" required>
+                <option value="">Select user...</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="flex gap-x-3 mt-7">
+            <button onclick="saveRequest()" 
+                    class="flex-1 sm:flex-none px-8 py-2.5 rounded-xl bg-blue-800 hover:bg-blue-900 transition-colors text-white font-semibold text-sm flex items-center justify-center gap-2">
+              <i class="fa-solid fa-save"></i>
+              <span id="save-btn-text">Save &amp; Route for Approval</span>
+            </button>
+            <button onclick="resetFormAndGoToStatus()" 
+                    class="px-5 py-2.5 border border-slate-300 hover:bg-slate-50 font-medium text-sm rounded-xl">Cancel</button>
+          </div>
+          <div id="form-hint" class="text-xs text-emerald-700 mt-3 hidden">
+            <i class="fa-solid fa-info-circle"></i> Request will be routed to the approvers assigned to the selected GL account.
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- GENERAL LEDGER -->
+    <div id="section-gl" class="section">
+      <div class="flex items-center justify-between mb-4">
+        <div>
+          <h1 class="text-2xl font-semibold tracking-tight">General Ledger Accounts</h1>
+          <p class="text-sm text-slate-500">Add, edit, remove accounts. Assign up to 3 sequential approvers per account.</p>
+        </div>
+        <button onclick="openGLModal()" 
+                class="px-4 py-2 bg-blue-800 text-white text-sm font-semibold rounded-xl flex items-center gap-x-2 hover:bg-blue-900">
+          <i class="fa-solid fa-plus"></i>
+          <span>Add Account</span>
+        </button>
+      </div>
+
+      <div class="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-sm">
+        <div class="overflow-x-auto">
+          <table class="w-full text-sm">
+            <thead>
+              <tr class="bg-slate-50 border-b text-xs text-left font-semibold text-slate-600">
+                <th class="px-5 py-3 w-20">Acct #</th>
+                <th class="px-4 py-3">Account Name</th>
+                <th class="px-4 py-3">Expense</th>
+                <th class="px-4 py-3">Primary Approver</th>
+                <th class="px-4 py-3">Secondary</th>
+                <th class="px-4 py-3">Tertiary</th>
+                <th class="px-3 py-3 w-20 text-right">Actions</th>
+              </tr>
+            </thead>
+            <tbody id="gl-table-body" class="divide-y"></tbody>
+          </table>
+        </div>
+      </div>
+      <div class="text-xs text-slate-500 mt-2 px-1">Seeded from the provided Johnson Church of Christ Account List. Edit approvers to control routing.</div>
+    </div>
+
+    <!-- USERS -->
+    <div id="section-users" class="section">
+      <div class="flex items-center justify-between mb-4">
+        <div>
+          <h1 class="text-2xl font-semibold tracking-tight">Users</h1>
+          <p class="text-sm text-slate-500">People who can submit requests and act as approvers</p>
+        </div>
+        <button onclick="openUserModal()" 
+                class="px-4 py-2 bg-blue-800 text-white text-sm font-semibold rounded-xl flex items-center gap-x-2 hover:bg-blue-900">
+          <i class="fa-solid fa-user-plus"></i>
+          <span>Add User</span>
+        </button>
+      </div>
+
+      <div class="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden">
+        <div class="overflow-x-auto">
+          <table class="min-w-full text-sm">
+            <thead>
+              <tr class="bg-slate-50 text-xs font-semibold text-slate-600 border-b">
+                <th class="px-5 py-3 text-left">Username</th>
+                <th class="px-4 py-3 text-left">Name</th>
+                <th class="px-4 py-3 text-left">Email</th>
+                <th class="px-3 py-3 w-16 text-right">Actions</th>
+              </tr>
+            </thead>
+            <tbody id="users-table-body" class="divide-y"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- EMAIL LOG -->
+    <div id="section-emaillog" class="section">
+      <div class="flex justify-between items-baseline mb-4">
+        <div>
+          <h1 class="text-2xl font-semibold tracking-tight">Email Log</h1>
+          <p class="text-sm text-slate-500">All sent or simulated approval / notification emails</p>
+        </div>
+        <button onclick="loadEmailLog()" class="text-sm px-3 py-1 rounded-lg border border-slate-200 hover:bg-slate-50">
+          <i class="fa-solid fa-sync"></i> Refresh
+        </button>
+      </div>
+      
+      <div class="bg-white rounded-2xl border border-slate-200 shadow-sm p-1">
+        <div id="email-log-list" class="divide-y max-h-[520px] overflow-auto text-sm"></div>
+      </div>
+      <div class="mt-2 text-xs text-amber-700 px-1">
+        <i class="fa-solid fa-info-circle"></i> 
+        Emails are simulated by default (shown here). Configure SMTP in <code>app.py</code> to send real emails.
+      </div>
+    </div>
+  </div>
+
+  <!-- GL Modal -->
+  <div id="gl-modal" class="hidden fixed inset-0 bg-black/40 flex items-center justify-center z-[100]" onclick="if (event.target.id === 'gl-modal') closeGLModal()">
+    <div onclick="event.stopImmediatePropagation()" class="modal bg-white w-full max-w-lg mx-3 rounded-2xl shadow-xl border">
+      <div class="px-5 py-4 border-b flex items-center">
+        <div class="font-semibold text-lg" id="gl-modal-title">Add GL Account</div>
+        <button onclick="closeGLModal()" class="ml-auto text-2xl leading-none text-slate-400 hover:text-slate-700">&times;</button>
+      </div>
+      <div class="p-5 space-y-4">
+        <input type="hidden" id="gl-id">
+        
+        <div class="grid grid-cols-2 gap-4">
+          <div>
+            <label class="text-xs font-semibold">Account Number *</label>
+            <input id="gl-acct-num" type="text" class="w-full mt-1 border border-slate-300 rounded-lg px-3 py-2 text-sm" placeholder="5900">
+          </div>
+          <div class="flex items-end">
+            <label class="flex items-center gap-x-2 text-sm pb-2">
+              <input type="checkbox" id="gl-is-expense" checked class="w-4 h-4 accent-blue-700">
+              <span class="text-sm">Expense Account</span>
+            </label>
+          </div>
+        </div>
+        
+        <div>
+          <label class="text-xs font-semibold">Account Name *</label>
+          <input id="gl-name" type="text" class="w-full mt-1 border border-slate-300 rounded-lg px-3 py-2 text-sm" placeholder="BUILDING AND GROUNDS:Maintenance">
+        </div>
+        
+        <div>
+          <label class="text-xs font-semibold">Description</label>
+          <input id="gl-desc" type="text" class="w-full mt-1 border border-slate-300 rounded-lg px-3 py-2 text-sm">
+        </div>
+
+        <div>
+          <label class="text-xs font-semibold block mb-1">Approvers (Primary → Secondary → Tertiary)</label>
+          <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <div>
+              <div class="text-[10px] text-emerald-700 mb-0.5 font-medium">PRIMARY</div>
+              <select id="gl-primary" class="w-full border border-slate-300 text-sm rounded-lg px-2 py-1.5 bg-white"></select>
+            </div>
+            <div>
+              <div class="text-[10px] text-amber-600 mb-0.5 font-medium">SECONDARY</div>
+              <select id="gl-secondary" class="w-full border border-slate-300 text-sm rounded-lg px-2 py-1.5 bg-white"></select>
+            </div>
+            <div>
+              <div class="text-[10px] text-slate-500 mb-0.5 font-medium">TERTIARY</div>
+              <select id="gl-tertiary" class="w-full border border-slate-300 text-sm rounded-lg px-2 py-1.5 bg-white"></select>
+            </div>
+          </div>
+          <div class="text-[10px] text-slate-500 mt-1">Leave blank to skip a step in the chain.</div>
+        </div>
+      </div>
+      <div class="px-5 py-4 border-t flex justify-end gap-x-3 bg-slate-50 rounded-b-2xl">
+        <button onclick="closeGLModal()" class="px-4 py-2 text-sm">Cancel</button>
+        <button onclick="saveGLAccount()" class="px-6 py-2 bg-blue-800 text-white text-sm font-semibold rounded-xl">Save Account</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- User Modal -->
+  <div id="user-modal" class="hidden fixed inset-0 bg-black/40 flex items-center justify-center z-[100]" onclick="if (event.target.id === 'user-modal') closeUserModal()">
+    <div onclick="event.stopImmediatePropagation()" class="modal bg-white w-full max-w-md mx-3 rounded-2xl shadow-xl border">
+      <div class="px-5 py-4 border-b flex items-center">
+        <div class="font-semibold text-lg" id="user-modal-title">Add User</div>
+        <button onclick="closeUserModal()" class="ml-auto text-2xl leading-none text-slate-400 hover:text-slate-700">&times;</button>
+      </div>
+      <div class="p-5 space-y-4">
+        <input type="hidden" id="user-id">
+        
+        <div>
+          <label class="text-xs font-semibold">Username *</label>
+          <input id="user-username" type="text" class="w-full mt-1 border border-slate-300 rounded-lg px-3 py-2 text-sm">
+        </div>
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="text-xs font-semibold">First Name *</label>
+            <input id="user-first" type="text" class="w-full mt-1 border border-slate-300 rounded-lg px-3 py-2 text-sm">
+          </div>
+          <div>
+            <label class="text-xs font-semibold">Last Name *</label>
+            <input id="user-last" type="text" class="w-full mt-1 border border-slate-300 rounded-lg px-3 py-2 text-sm">
+          </div>
+        </div>
+        <div>
+          <label class="text-xs font-semibold">Email Address *</label>
+          <input id="user-email" type="email" class="w-full mt-1 border border-slate-300 rounded-lg px-3 py-2 text-sm" placeholder="name@johnsoncoc.org">
+        </div>
+        <div>
+          <label class="text-xs font-semibold">Password <span class="text-slate-400 text-[10px]">(leave blank on edit to keep current)</span></label>
+          <input id="user-password" type="password" autocomplete="new-password" class="w-full mt-1 border border-slate-300 rounded-lg px-3 py-2 text-sm" placeholder="••••••••">
+          <div class="text-[10px] text-amber-600 mt-0.5">Default for seeded users: <span class="font-mono">jccpass</span></div>
+        </div>
+      </div>
+      <div class="px-5 py-4 border-t flex justify-end gap-x-3 bg-slate-50 rounded-b-2xl">
+        <button onclick="closeUserModal()" class="px-4 py-2 text-sm">Cancel</button>
+        <button onclick="saveUser()" class="px-6 py-2 bg-blue-800 text-white text-sm font-semibold rounded-xl">Save User</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Request Detail / Edit Modal -->
+  <div id="request-modal" class="hidden fixed inset-0 bg-black/40 flex items-end md:items-center justify-center z-[110]" onclick="if (event.target.id === 'request-modal') closeRequestModal()">
+    <div onclick="event.stopImmediatePropagation()" class="modal bg-white w-full md:w-[640px] md:mx-0 md:rounded-2xl md:m-4 rounded-t-2xl border shadow-xl">
+      <div class="px-5 py-3.5 border-b flex items-center">
+        <div>
+          <span class="font-semibold">Request #<span id="detail-id"></span></span>
+          <span id="detail-status-badge" class="ml-2"></span>
+        </div>
+        <button onclick="closeRequestModal()" class="ml-auto text-slate-400 hover:text-slate-700 text-2xl leading-none">&times;</button>
+      </div>
+
+      <div class="p-5 text-sm space-y-4" id="request-detail-content">
+        <!-- Populated by JS -->
+      </div>
+
+      <div class="px-5 py-4 border-t flex flex-wrap gap-2 bg-slate-50 md:rounded-b-2xl" id="request-modal-actions">
+        <!-- Dynamic buttons -->
+      </div>
+    </div>
+  </div>
+
+  <footer class="text-center py-5 text-xs text-slate-400">
+    Johnson Church of Christ • Accounts Payable • Local Desktop / Mobile Web App
+  </footer>
+
+  <script>
+    // Tailwind script
+    function initTailwind() {
+      document.documentElement.style.setProperty('--accent', '#1e40af');
+    }
+
+    let USERS = [];
+    let GL_ACCOUNTS = [];
+    let CURRENT_REQUESTS = [];
+    let editingRequestId = null;
+
+    function showSection(name) {
+      // hide all
+      document.querySelectorAll('.section').forEach(s => s.classList.remove('active'));
+      // show target
+      const target = document.getElementById('section-' + name);
+      if (target) target.classList.add('active');
+
+      // update nav
+      document.querySelectorAll('[id^="nav-"]').forEach(el => el.classList.remove('nav-active'));
+      const nav = document.getElementById('nav-' + name);
+      if (nav) nav.classList.add('nav-active');
+
+      // load data
+      if (name === 'status') loadRequests();
+      if (name === 'gl') loadGLAccounts();
+      if (name === 'users') loadUsers();
+      if (name === 'emaillog') loadEmailLog();
+    }
+
+    function toggleMobileNav() {
+      const nav = document.getElementById('mobile-nav');
+      nav.classList.toggle('hidden');
+    }
+
+    // ===== DATA LOADING =====
+    async function loadStats() {
+      try {
+        const res = await fetch('/api/stats');
+        const data = await res.json();
+        document.getElementById('stat-total').textContent = data.total || 0;
+        document.getElementById('stat-pending').textContent = data.by_status?.Pending || 0;
+      } catch(e) {}
+    }
+
+    async function loadUsers(forSelect = false) {
+      const res = await fetch('/api/users');
+      USERS = await res.json();
+
+      if (forSelect) return USERS;
+
+      const tbody = document.getElementById('users-table-body');
+      tbody.innerHTML = '';
+
+      if (USERS.length === 0) {
+        tbody.innerHTML = `<tr><td colspan="4" class="px-5 py-6 text-center text-slate-400">No users yet. Add some above.</td></tr>`;
+        return;
+      }
+
+      USERS.forEach(u => {
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+          <td class="px-5 py-3 font-medium">${u.username}</td>
+          <td class="px-4 py-3">${u.first_name} ${u.last_name}</td>
+          <td class="px-4 py-3 text-slate-600">${u.email}</td>
+          <td class="px-3 py-3 text-right">
+            <button onclick="editUser(${u.id})" class="px-2 py-1 text-blue-700 hover:bg-blue-50 rounded"><i class="fa-solid fa-edit"></i></button>
+            <button onclick="deleteUser(${u.id})" class="px-2 py-1 text-red-600 hover:bg-red-50 rounded ml-1"><i class="fa-solid fa-trash"></i></button>
+          </td>
+        `;
+        tbody.appendChild(tr);
+      });
+    }
+
+    async function loadGLAccounts(forSelect = false) {
+      const res = await fetch('/api/gl_accounts');
+      GL_ACCOUNTS = await res.json();
+
+      if (forSelect) return GL_ACCOUNTS;
+
+      const tbody = document.getElementById('gl-table-body');
+      tbody.innerHTML = '';
+
+      if (GL_ACCOUNTS.length === 0) {
+        tbody.innerHTML = `<tr><td colspan="7" class="px-5 py-8 text-center text-slate-400">No accounts.</td></tr>`;
+        return;
+      }
+
+      GL_ACCOUNTS.forEach(g => {
+        const tr = document.createElement('tr');
+        const isExp = g.is_expense ? '<span class="text-emerald-700 text-xs font-medium">Yes</span>' : '<span class="text-slate-400">No</span>';
+        
+        tr.innerHTML = `
+          <td class="px-5 py-3 font-semibold mono">${g.account_number}</td>
+          <td class="px-4 py-3">${g.name}</td>
+          <td class="px-4 py-3">${isExp}</td>
+          <td class="px-4 py-3 text-sm">${g.primary_name || '<span class="text-red-400">— none —</span>'}</td>
+          <td class="px-4 py-3 text-sm">${g.secondary_name || '<span class="text-slate-300">—</span>'}</td>
+          <td class="px-4 py-3 text-sm">${g.tertiary_name || '<span class="text-slate-300">—</span>'}</td>
+          <td class="px-3 py-3 text-right whitespace-nowrap">
+            <button onclick="editGL(${g.id})" class="text-blue-700 px-1.5 hover:bg-blue-50 rounded py-px"><i class="fa-solid fa-edit"></i></button>
+            <button onclick="deleteGL(${g.id})" class="text-red-600 px-1.5 hover:bg-red-50 rounded py-px ml-0.5"><i class="fa-solid fa-trash"></i></button>
+          </td>
+        `;
+        tbody.appendChild(tr);
+      });
+    }
+
+    async function loadRequests() {
+      const params = new URLSearchParams();
+      
+      const df = document.getElementById('filter-date-from').value;
+      const dt = document.getElementById('filter-date-to').value;
+      const acct = document.getElementById('filter-account').value.trim();
+      const status = document.getElementById('filter-status').value;
+      const search = document.getElementById('filter-search').value.trim();
+
+      if (df) params.set('date_from', df);
+      if (dt) params.set('date_to', dt);
+      if (acct) params.set('account_number', acct);
+      if (status) params.set('status', status);
+      if (search) params.set('search', search);
+
+      const res = await fetch('/api/requests?' + params.toString());
+      CURRENT_REQUESTS = await res.json();
+
+      renderRequestsTable();
+      loadStats();
+    }
+
+    function renderRequestsTable() {
+      const tbody = document.getElementById('requests-table-body');
+      const mobile = document.getElementById('requests-mobile');
+      tbody.innerHTML = '';
+      mobile.innerHTML = '';
+
+      if (CURRENT_REQUESTS.length === 0) {
+        tbody.innerHTML = `<tr><td colspan="8" class="px-6 py-8 text-center text-slate-400">No requests match the filters.</td></tr>`;
+        mobile.innerHTML = `<div class="p-6 text-center text-sm text-slate-400">No matching requests.</div>`;
+        return;
+      }
+
+      CURRENT_REQUESTS.forEach(req => {
+        const statusClass = req.status === 'Pending' ? 'status-pending' : 
+                           (req.status === 'Approved' ? 'status-approved' : 'status-rejected');
+        
+        // Progress display
+        let progress = '';
+        if (req.approver_chain && req.approver_chain.length > 0) {
+          progress = req.approver_chain.map((step, idx) => {
+            const isDone = step.approved || req.status === 'Approved';
+            const isCurrent = req.status === 'Pending' && (req.current_step === step.step);
+            const dotClass = isDone ? 'done' : (isCurrent ? 'current' : 'pending');
+            const label = step.name.split(' ')[0];
+            return `<span class="step-dot ${dotClass} text-[9px]">${label[0] || (idx+1)}</span>`;
+          }).join('<span class="mx-0.5 text-slate-300">→</span>');
+        } else {
+          progress = `<span class="text-xs text-slate-400">No approvers assigned</span>`;
+        }
+
+        const statusHtml = `<span class="${statusClass}">${req.status}</span>`;
+        const amount = Number(req.amount).toLocaleString('en-US', {style:'currency', currency:'USD'});
+
+        // Desktop row
+        const tr = document.createElement('tr');
+        tr.className = 'hover:bg-slate-50';
+        tr.innerHTML = `
+          <td class="px-4 py-3 font-medium text-blue-900 mono">#${req.id}</td>
+          <td class="px-4 py-3 text-xs text-slate-500">${req.invoice_date || ''}</td>
+          <td class="px-4 py-3 font-medium">${req.vendor}</td>
+          <td class="px-4 py-3 font-semibold tabular-nums">${amount}</td>
+          <td class="px-4 py-3 text-xs">${req.gl_display}</td>
+          <td class="px-4 py-3 text-xs">${req.requester_name}</td>
+          <td class="px-4 py-3">
+            <div class="flex items-center gap-x-2">
+              ${statusHtml}
+              <div class="flex items-center">${progress}</div>
+            </div>
+            ${req.status === 'Pending' ? `<div class="text-[10px] text-slate-500 mt-px">Awaiting step ${req.current_step}</div>` : ''}
+          </td>
+          <td class="px-4 py-3 text-right">
+            <button onclick="viewRequest(${req.id})" 
+                    class="text-xs px-3 py-1 rounded-md border border-slate-200 hover:bg-white font-medium">View</button>
+          </td>
+        `;
+        tbody.appendChild(tr);
+
+        // Mobile card
+        const div = document.createElement('div');
+        div.className = 'p-4 mobile-card';
+        div.innerHTML = `
+          <div class="flex justify-between">
+            <div>
+              <span class="font-semibold">#${req.id}</span>
+              <span class="ml-2 ${statusClass}">${req.status}</span>
+            </div>
+            <div class="font-semibold tabular-nums">${amount}</div>
+          </div>
+          <div class="mt-1 text-sm font-medium">${req.vendor}</div>
+          <div class="text-xs text-slate-500 mt-0.5">${req.gl_display}</div>
+          
+          <div class="mt-2 flex items-center justify-between text-xs">
+            <div>Requested by: <span class="font-medium">${req.requester_name}</span></div>
+            <div>${req.invoice_date || ''}</div>
+          </div>
+
+          <div class="mt-2 flex items-center gap-1">
+            ${progress}
+          </div>
+
+          <div class="mt-3">
+            <button onclick="viewRequest(${req.id})" class="text-xs w-full text-center py-1.5 rounded-lg border border-slate-200 font-medium">View / Edit</button>
+          </div>
+        `;
+        mobile.appendChild(div);
+      });
+    }
+
+    function clearFilters() {
+      document.getElementById('filter-date-from').value = '';
+      document.getElementById('filter-date-to').value = '';
+      document.getElementById('filter-account').value = '';
+      document.getElementById('filter-status').value = 'All';
+      document.getElementById('filter-search').value = '';
+      loadRequests();
+    }
+
+    async function populateSelects() {
+      // Users
+      await loadUsers(true);
+      const userSel = document.getElementById('req-requested-by');
+      userSel.innerHTML = '<option value="">Select user...</option>';
+      USERS.forEach(u => {
+        const opt = document.createElement('option');
+        opt.value = u.id;
+        opt.textContent = `${u.first_name} ${u.last_name} (${u.username})`;
+        userSel.appendChild(opt);
+      });
+
+      // GL Accounts - setup searchable selector
+      await loadGLAccounts(true);
+      setupGLSearch();
+    }
+
+    // ===== SEARCHABLE GL ACCOUNT SELECTOR =====
+    function setupGLSearch() {
+      const searchInput = document.getElementById('req-gl-search');
+      const hiddenInput = document.getElementById('req-gl');
+      const dropdown = document.getElementById('gl-dropdown');
+
+      if (!searchInput || !hiddenInput || !dropdown) return;
+
+      // Prevent attaching duplicate event listeners if setup is called multiple times
+      if (searchInput._glSearchSetupDone) return;
+      searchInput._glSearchSetupDone = true;
+
+      let currentFiltered = [];
+
+      function renderDropdown(items) {
+        dropdown.innerHTML = '';
+        if (!items || items.length === 0) {
+          const div = document.createElement('div');
+          div.className = 'px-3 py-2 text-slate-400 text-sm';
+          div.textContent = 'No matching accounts';
+          dropdown.appendChild(div);
+          return;
+        }
+        items.forEach(g => {
+          const div = document.createElement('div');
+          div.className = 'px-3 py-2 hover:bg-blue-50 cursor-pointer flex justify-between items-center gap-2';
+          div.innerHTML = `
+            <span class="font-semibold text-blue-900 mono">${g.account_number}</span>
+            <span class="text-slate-600 flex-1 truncate">${g.name}</span>
+          `;
+          div.onclick = () => {
+            hiddenInput.value = g.id;
+            searchInput.value = `${g.account_number} — ${g.name}`;
+            dropdown.classList.add('hidden');
+          };
+          dropdown.appendChild(div);
+        });
+      }
+
+      searchInput.oninput = () => {
+        const term = (searchInput.value || '').toLowerCase().trim();
+        hiddenInput.value = ''; // invalidate selection while typing
+
+        currentFiltered = (GL_ACCOUNTS || []).filter(g =>
+          !term ||
+          (g.account_number && g.account_number.toLowerCase().includes(term)) ||
+          (g.name && g.name.toLowerCase().includes(term))
+        ).slice(0, 60);
+
+        renderDropdown(currentFiltered);
+        if (currentFiltered.length > 0) {
+          dropdown.classList.remove('hidden');
+        } else {
+          dropdown.classList.add('hidden');
+        }
+      };
+
+      searchInput.onfocus = () => {
+        const term = (searchInput.value || '').toLowerCase().trim();
+        currentFiltered = (GL_ACCOUNTS || []).filter(g =>
+          !term ||
+          (g.account_number && g.account_number.toLowerCase().includes(term)) ||
+          (g.name && g.name.toLowerCase().includes(term))
+        ).slice(0, 60);
+
+        renderDropdown(currentFiltered);
+        dropdown.classList.remove('hidden');
+      };
+
+      // Also show list when clicking the input (in case focus doesn't trigger in some browsers)
+      searchInput.onclick = () => {
+        if (dropdown.classList.contains('hidden')) {
+          const term = (searchInput.value || '').toLowerCase().trim();
+          currentFiltered = (GL_ACCOUNTS || []).filter(g =>
+            !term ||
+            (g.account_number && g.account_number.toLowerCase().includes(term)) ||
+            (g.name && g.name.toLowerCase().includes(term))
+          ).slice(0, 60);
+          renderDropdown(currentFiltered);
+          dropdown.classList.remove('hidden');
+        }
+      };
+
+      // Close when clicking elsewhere
+      document.addEventListener('click', function(e) {
+        if (!searchInput.contains(e.target) && !dropdown.contains(e.target)) {
+          dropdown.classList.add('hidden');
+        }
+      });
+
+      // Enter picks top result
+      searchInput.onkeydown = function(e) {
+        if (e.key === 'Enter' && currentFiltered.length > 0) {
+          const first = currentFiltered[0];
+          hiddenInput.value = first.id;
+          searchInput.value = `${first.account_number} — ${first.name}`;
+          dropdown.classList.add('hidden');
+          e.preventDefault();
+        }
+        if (e.key === 'Escape') {
+          dropdown.classList.add('hidden');
+        }
+      };
+    }
+
+    function setSelectedGL(glId) {
+      const hidden = document.getElementById('req-gl');
+      const search = document.getElementById('req-gl-search');
+      if (!hidden || !search || !glId) return;
+
+      hidden.value = glId;
+
+      const found = (GL_ACCOUNTS || []).find(g => String(g.id) === String(glId));
+      if (found) {
+        search.value = `${found.account_number} — ${found.name}`;
+      }
+    }
+
+    // ===== REQUEST FORM =====
+    async function openNewRequest() {
+      showSection('new-request');
+      resetRequestForm();
+      await populateSelects();
+      document.getElementById('form-hint').classList.remove('hidden');
+    }
+
+    function resetRequestForm() {
+      editingRequestId = null;
+      document.getElementById('request-id').value = '';
+      document.getElementById('form-title').textContent = 'New Request';
+      document.getElementById('save-btn-text').textContent = 'Save & Route for Approval';
+
+      ['req-vendor','req-invoice-number','req-invoice-date','req-amount','req-description'].forEach(id => {
+        document.getElementById(id).value = '';
+      });
+      // Clear searchable GL control
+      const glSearch = document.getElementById('req-gl-search');
+      const glHidden = document.getElementById('req-gl');
+      if (glSearch) glSearch.value = '';
+      if (glHidden) glHidden.value = '';
+      document.getElementById('req-requested-by').value = '';
+    }
+
+    async function saveRequest() {
+      const payload = {
+        vendor: document.getElementById('req-vendor').value.trim(),
+        invoice_number: document.getElementById('req-invoice-number').value.trim(),
+        invoice_date: document.getElementById('req-invoice-date').value,
+        amount: parseFloat(document.getElementById('req-amount').value),
+        description: document.getElementById('req-description').value.trim(),
+        gl_account_id: parseInt(document.getElementById('req-gl').value),
+        requested_by_id: parseInt(document.getElementById('req-requested-by').value)
+      };
+
+      if (!payload.vendor || !payload.invoice_date || !payload.amount || !payload.gl_account_id || !payload.requested_by_id) {
+        alert('Please fill in all required fields (Vendor, Date, Amount, GL Account, Requested By).');
+        return;
+      }
+
+      const reqId = document.getElementById('request-id').value;
+      
+      try {
+        let res;
+        if (reqId) {
+          // edit
+          res = await fetch('/api/requests/' + reqId, {
+            method: 'PUT',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(payload)
+          });
+        } else {
+          res = await fetch('/api/requests', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(payload)
+          });
+        }
+
+        if (!res.ok) {
+          const err = await res.json();
+          throw new Error(err.error || 'Save failed');
+        }
+
+        const saved = await res.json();
+        
+        resetRequestForm();
+        await loadRequests();
+        showSection('status');
+        
+        // Show confirmation
+        setTimeout(() => {
+          if (!reqId) {
+            alert('Request #' + saved.id + ' created and routed for approval!\n\nCheck the Email Log to see the simulated email + approval links.');
+          } else {
+            alert('Request updated.');
+          }
+        }, 220);
+      } catch (e) {
+        alert('Error saving request: ' + e.message);
+      }
+    }
+
+    function resetFormAndGoToStatus() {
+      resetRequestForm();
+      showSection('status');
+    }
+
+    // ===== VIEW / EDIT REQUEST =====
+    async function viewRequest(id) {
+      const res = await fetch('/api/requests/' + id);
+      if (!res.ok) return alert('Could not load request');
+      const req = await res.json();
+
+      document.getElementById('detail-id').textContent = req.id;
+
+      const statusEl = document.getElementById('detail-status-badge');
+      const cls = req.status === 'Pending' ? 'status-pending' : (req.status === 'Approved' ? 'status-approved' : 'status-rejected');
+      statusEl.innerHTML = `<span class="${cls} px-3 py-0.5">${req.status}</span>`;
+
+      const content = document.getElementById('request-detail-content');
+      
+      let html = `
+        <div class="grid grid-cols-2 gap-x-6 gap-y-2 text-sm">
+          <div><span class="text-slate-500">Vendor:</span> <span class="font-medium">${req.vendor}</span></div>
+          <div><span class="text-slate-500">Invoice #:</span> ${req.invoice_number || '—'}</div>
+          <div><span class="text-slate-500">Invoice Date:</span> ${req.invoice_date}</div>
+          <div><span class="text-slate-500">Amount:</span> <span class="font-semibold tabular-nums">$${Number(req.amount).toFixed(2)}</span></div>
+          <div class="col-span-2"><span class="text-slate-500">Description:</span><br> ${req.description || '<span class="text-slate-400">—</span>'}</div>
+          <div><span class="text-slate-500">GL Account:</span><br> <span class="font-medium">${req.gl ? req.gl.account_number + ' — ' + req.gl.name : ''}</span></div>
+          <div><span class="text-slate-500">Requested By:</span><br> ${req.requester ? req.requester.first_name + ' ' + req.requester.last_name + '<br><span class="text-xs">' + req.requester.email + '</span>' : ''}</div>
+        </div>
+      `;
+
+      // Progress
+      html += `<div class="pt-3 border-t mt-3"><div class="text-xs uppercase tracking-wider text-slate-500 mb-1.5">Approval Progress</div>`;
+      
+      if (req.primary_approver_id || req.secondary_approver_id || req.tertiary_approver_id) {
+        const chain = [];
+        if (req.primary_approver_id) chain.push({step:1, id: req.primary_approver_id});
+        if (req.secondary_approver_id) chain.push({step:2, id: req.secondary_approver_id});
+        if (req.tertiary_approver_id) chain.push({step:3, id: req.tertiary_approver_id});
+
+        html += `<div class="flex flex-wrap gap-x-5 gap-y-1">`;
+        chain.forEach((c, idx) => {
+          const u = USERS.find(x => x.id === c.id) || {};
+          const name = u.first_name ? `${u.first_name} ${u.last_name}` : 'User #' + c.id;
+          const isDone = req.status === 'Approved' || (req.current_step > c.step);
+          const isCurr = req.status === 'Pending' && req.current_step === c.step;
+          const badge = isDone ? 'bg-emerald-700 text-white' : (isCurr ? 'bg-blue-700 text-white' : 'bg-slate-200 text-slate-600');
+          html += `<div class="px-3 py-1 rounded-full text-xs ${badge} flex items-center gap-1.5">
+                     <span class="font-medium">${idx+1}. ${name}</span>
+                     ${isDone ? '<i class="fa-solid fa-check text-xs"></i>' : ''}
+                   </div>`;
+        });
+        html += `</div>`;
+      } else {
+        html += `<div class="text-amber-600 text-xs">No approver chain configured on this GL account.</div>`;
+      }
+      html += `</div>`;
+
+      // History
+      if (req.history && req.history.length) {
+        html += `<div class="pt-3 border-t mt-3"><div class="text-xs uppercase tracking-wider text-slate-500 mb-1">History</div>`;
+        req.history.forEach(h => {
+          const actColor = h.action === 'approved' ? 'text-emerald-700' : 'text-red-700';
+          html += `<div class="text-xs flex gap-2 py-px"><span class="text-slate-400">${h.acted_at?.substring(0,16)}</span> <span class="${actColor} font-medium">${h.action.toUpperCase()}</span> by user #${h.approver_id} ${h.notes ? '— ' + h.notes : ''}</div>`;
+        });
+        html += `</div>`;
+      }
+
+      content.innerHTML = html;
+
+      // Actions
+      const actions = document.getElementById('request-modal-actions');
+      actions.innerHTML = '';
+
+      if (req.status === 'Pending') {
+        // Edit button
+        const editBtn = document.createElement('button');
+        editBtn.className = `flex-1 md:flex-none px-4 py-2 bg-white border border-slate-300 hover:bg-slate-50 rounded-xl text-sm font-medium`;
+        editBtn.innerHTML = `<i class="fa-solid fa-edit mr-2"></i> Edit Request`;
+        editBtn.onclick = () => {
+          closeRequestModal();
+          editRequestFromData(req);
+        };
+        actions.appendChild(editBtn);
+
+        // Manual approve / reject (for testing)
+        const approveBtn = document.createElement('button');
+        approveBtn.className = `flex-1 md:flex-none px-4 py-2 bg-emerald-700 hover:bg-emerald-800 text-white rounded-xl text-sm font-semibold`;
+        approveBtn.innerHTML = `<i class="fa-solid fa-check mr-1.5"></i> Approve (Manual)`;
+        approveBtn.onclick = () => manualAction(req.id, 'approve');
+
+        const rejectBtn = document.createElement('button');
+        rejectBtn.className = `flex-1 md:flex-none px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-xl text-sm font-semibold`;
+        rejectBtn.innerHTML = `<i class="fa-solid fa-times mr-1.5"></i> Reject (Manual)`;
+        rejectBtn.onclick = () => manualAction(req.id, 'reject');
+
+        actions.appendChild(approveBtn);
+        actions.appendChild(rejectBtn);
+      } else {
+        const note = document.createElement('div');
+        note.className = 'text-sm text-slate-500 px-1 py-1';
+        note.textContent = req.status === 'Approved' ? 'This request has been fully approved.' : 'This request was rejected.';
+        actions.appendChild(note);
+      }
+
+      // Always allow close
+      const closeBtn = document.createElement('button');
+      closeBtn.className = 'flex-1 md:flex-none px-4 py-2 text-sm border border-slate-200 rounded-xl';
+      closeBtn.textContent = 'Close';
+      closeBtn.onclick = closeRequestModal;
+      actions.appendChild(closeBtn);
+
+      document.getElementById('request-modal').classList.remove('hidden');
+      document.getElementById('request-modal').classList.add('flex');
+    }
+
+    function closeRequestModal() {
+      const modal = document.getElementById('request-modal');
+      modal.classList.remove('flex');
+      modal.classList.add('hidden');
+    }
+
+    function editRequestFromData(req) {
+      showSection('new-request');
+      
+      editingRequestId = req.id;
+      document.getElementById('request-id').value = req.id;
+      document.getElementById('form-title').textContent = 'Edit Request #' + req.id;
+      document.getElementById('save-btn-text').textContent = 'Save Changes';
+
+      document.getElementById('req-vendor').value = req.vendor || '';
+      document.getElementById('req-invoice-number').value = req.invoice_number || '';
+      document.getElementById('req-invoice-date').value = req.invoice_date || '';
+      document.getElementById('req-amount').value = req.amount || '';
+      document.getElementById('req-description').value = req.description || '';
+
+      // populate selects then set values
+      populateSelects().then(() => {
+        setSelectedGL(req.gl_account_id);
+        document.getElementById('req-requested-by').value = req.requested_by_id;
+      });
+    }
+
+    async function manualAction(reqId, action) {
+      const notes = action === 'reject' ? prompt('Reason for rejection (optional):') : null;
+      
+      const res = await fetch(`/api/requests/${reqId}/manual_action`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ action, notes })
+      });
+      const result = await res.json();
+
+      closeRequestModal();
+      await loadRequests();
+      alert(result.message || 'Done');
+    }
+
+    // ===== GL CRUD =====
+    function openGLModal(editGl = null) {
+      const modal = document.getElementById('gl-modal');
+      modal.classList.remove('hidden');
+      modal.classList.add('flex');
+
+      document.getElementById('gl-modal-title').textContent = editGl ? 'Edit GL Account' : 'Add GL Account';
+      document.getElementById('gl-id').value = editGl ? editGl.id : '';
+
+      // populate user dropdowns
+      const p = document.getElementById('gl-primary');
+      const s = document.getElementById('gl-secondary');
+      const t = document.getElementById('gl-tertiary');
+      
+      [p, s, t].forEach(sel => {
+        sel.innerHTML = `<option value="">— None —</option>`;
+        USERS.forEach(u => {
+          const o = document.createElement('option');
+          o.value = u.id;
+          o.textContent = `${u.first_name} ${u.last_name}`;
+          sel.appendChild(o);
+        });
+      });
+
+      if (editGl) {
+        document.getElementById('gl-acct-num').value = editGl.account_number || '';
+        document.getElementById('gl-name').value = editGl.name || '';
+        document.getElementById('gl-desc').value = editGl.description || '';
+        document.getElementById('gl-is-expense').checked = !!editGl.is_expense;
+        p.value = editGl.primary_approver_id || '';
+        s.value = editGl.secondary_approver_id || '';
+        t.value = editGl.tertiary_approver_id || '';
+      } else {
+        document.getElementById('gl-acct-num').value = '';
+        document.getElementById('gl-name').value = '';
+        document.getElementById('gl-desc').value = '';
+        document.getElementById('gl-is-expense').checked = true;
+        p.value = ''; s.value = ''; t.value = '';
+      }
+    }
+
+    function closeGLModal() {
+      const modal = document.getElementById('gl-modal');
+      modal.classList.add('hidden');
+      modal.classList.remove('flex');
+    }
+
+    async function saveGLAccount() {
+      const id = document.getElementById('gl-id').value;
+      const payload = {
+        account_number: document.getElementById('gl-acct-num').value.trim(),
+        name: document.getElementById('gl-name').value.trim(),
+        description: document.getElementById('gl-desc').value.trim(),
+        is_expense: document.getElementById('gl-is-expense').checked,
+        primary_approver_id: parseIntOrNull(document.getElementById('gl-primary').value),
+        secondary_approver_id: parseIntOrNull(document.getElementById('gl-secondary').value),
+        tertiary_approver_id: parseIntOrNull(document.getElementById('gl-tertiary').value)
+      };
+
+      if (!payload.account_number || !payload.name) {
+        alert('Account number and name are required.');
+        return;
+      }
+
+      const url = id ? `/api/gl_accounts/${id}` : '/api/gl_accounts';
+      const method = id ? 'PUT' : 'POST';
+
+      const res = await fetch(url, {
+        method,
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(payload)
+      });
+
+      if (res.ok) {
+        closeGLModal();
+        await loadGLAccounts();
+      } else {
+        const err = await res.json().catch(() => ({}));
+        alert('Save failed: ' + (err.error || res.statusText));
+      }
+    }
+
+    function parseIntOrNull(v) {
+      const n = parseInt(v);
+      return isNaN(n) ? null : n;
+    }
+
+    async function editGL(id) {
+      await loadUsers(true);
+      const res = await fetch('/api/gl_accounts/' + id);
+      const gl = await res.json();
+      openGLModal(gl);
+    }
+
+    async function deleteGL(id) {
+      if (!confirm('Delete this GL account? Existing requests will keep their snapshot.')) return;
+      await fetch('/api/gl_accounts/' + id, { method: 'DELETE' });
+      await loadGLAccounts();
+    }
+
+    // ===== USERS CRUD =====
+    function openUserModal(editUser = null) {
+      const modal = document.getElementById('user-modal');
+      modal.classList.remove('hidden');
+      modal.classList.add('flex');
+
+      document.getElementById('user-modal-title').textContent = editUser ? 'Edit User' : 'Add User';
+      document.getElementById('user-id').value = editUser ? editUser.id : '';
+
+      if (editUser) {
+        document.getElementById('user-username').value = editUser.username || '';
+        document.getElementById('user-first').value = editUser.first_name || '';
+        document.getElementById('user-last').value = editUser.last_name || '';
+        document.getElementById('user-email').value = editUser.email || '';
+        document.getElementById('user-password').value = '';  // never prefill password
+      } else {
+        document.getElementById('user-username').value = '';
+        document.getElementById('user-first').value = '';
+        document.getElementById('user-last').value = '';
+        document.getElementById('user-email').value = '';
+        document.getElementById('user-password').value = '';
+      }
+    }
+
+    function closeUserModal() {
+      const modal = document.getElementById('user-modal');
+      modal.classList.remove('flex');
+      modal.classList.add('hidden');
+    }
+
+    async function saveUser() {
+      const id = document.getElementById('user-id').value;
+      const pw = document.getElementById('user-password').value.trim();
+
+      const payload = {
+        username: document.getElementById('user-username').value.trim(),
+        first_name: document.getElementById('user-first').value.trim(),
+        last_name: document.getElementById('user-last').value.trim(),
+        email: document.getElementById('user-email').value.trim()
+      };
+
+      if (pw) {
+        payload.password = pw;
+      }
+
+      if (!payload.username || !payload.first_name || !payload.last_name || !payload.email) {
+        alert('All fields are required.');
+        return;
+      }
+
+      const url = id ? `/api/users/${id}` : '/api/users';
+      const method = id ? 'PUT' : 'POST';
+
+      const res = await fetch(url, {
+        method, headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(payload)
+      });
+
+      if (res.ok) {
+        closeUserModal();
+        await loadUsers();
+        await populateSelects();
+      } else {
+        const err = await res.json().catch(()=>({}));
+        alert('Error: ' + (err.error || 'Failed to save user'));
+      }
+    }
+
+    async function editUser(id) {
+      await loadUsers(true);
+      const u = USERS.find(x => x.id === id);
+      if (u) openUserModal(u);
+    }
+
+    async function deleteUser(id) {
+      if (!confirm('Delete this user?')) return;
+      await fetch('/api/users/' + id, {method: 'DELETE'});
+      await loadUsers();
+      await populateSelects();
+    }
+
+    // ===== EXPORT =====
+    function exportCSV() {
+      const params = new URLSearchParams();
+      const df = document.getElementById('filter-date-from').value;
+      const dt = document.getElementById('filter-date-to').value;
+      const acct = document.getElementById('filter-account').value.trim();
+      const status = document.getElementById('filter-status').value;
+      const search = document.getElementById('filter-search').value.trim();
+
+      if (df) params.set('date_from', df);
+      if (dt) params.set('date_to', dt);
+      if (acct) params.set('account_number', acct);
+      if (status && status !== 'All') params.set('status', status);
+      if (search) params.set('search', search);
+
+      window.location = '/api/export?' + params.toString();
+    }
+
+    // ===== EMAIL LOG =====
+    async function loadEmailLog() {
+      const container = document.getElementById('email-log-list');
+      container.innerHTML = `<div class="p-4 text-sm text-slate-400">Loading...</div>`;
+
+      const res = await fetch('/api/email_log');
+      const logs = await res.json();
+
+      container.innerHTML = '';
+      if (!logs.length) {
+        container.innerHTML = `<div class="p-6 text-sm text-center text-slate-400">No emails logged yet.</div>`;
+        return;
+      }
+
+      logs.forEach(log => {
+        const div = document.createElement('div');
+        div.className = 'px-4 py-3';
+        const statusBadge = log.status === 'sent' ? 'bg-emerald-100 text-emerald-700' : 
+                           (log.status === 'failed' ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-700');
+        
+        div.innerHTML = `
+          <div class="flex justify-between items-start">
+            <div class="flex-1 min-w-0">
+              <div class="font-medium">${log.subject}</div>
+              <div class="text-xs text-slate-500">To: ${log.to_email} • ${log.sent_at}</div>
+              <div class="text-[10px] mt-1">
+                <span class="px-1.5 py-px rounded ${statusBadge}">${log.status}</span>
+              </div>
+              <details class="mt-1">
+                <summary class="cursor-pointer text-blue-700 text-xs">View full message</summary>
+                <pre class="text-[10px] whitespace-pre-wrap bg-slate-50 p-2 mt-1 rounded border text-slate-600 overflow-auto max-h-40">${escapeHtml(log.body || '')}</pre>
+              </details>
+            </div>
+          </div>
+        `;
+        container.appendChild(div);
+      });
+    }
+
+    function escapeHtml(str) {
+      return str.replace(/[&<>"']/g, function(m) {
+        return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m];
+      });
+    }
+
+    // ===== INIT =====
+    async function initApp() {
+      initTailwind();
+
+      // Initial loads
+      await Promise.all([
+        loadUsers(),
+        loadGLAccounts(),
+        loadStats()
+      ]);
+
+      await loadRequests();
+
+      // Pre-populate form selects (New Request) so options are ready immediately
+      await populateSelects();
+
+      // Default to status section
+      showSection('status');
+
+      // Keyboard support
+      document.addEventListener('keydown', function(e) {
+        if (e.key === '/' && document.activeElement.tagName === 'BODY') {
+          e.preventDefault();
+          const search = document.getElementById('filter-search');
+          if (search) {
+            showSection('status');
+            search.focus();
+          }
+        }
+      });
+
+      // Demo tip
+      setTimeout(() => {
+        const statusSection = document.getElementById('section-status');
+        if (statusSection && statusSection.classList.contains('active') && CURRENT_REQUESTS.length > 0) {
+          // nothing intrusive
+        }
+      }, 1600);
+
+      console.log('%c[AP] Johnson Church of Christ Accounts Payable app initialized.', 'color:#64748b');
+    }
+
+    // Boot
+    window.onload = initApp;
+  </script>
+</body>
+</html>
