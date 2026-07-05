@@ -13,6 +13,7 @@ from flask import Flask, request, jsonify, render_template, redirect, url_for, s
 import io
 import csv
 from werkzeug.security import generate_password_hash, check_password_hash
+from werkzeug.middleware.proxy_fix import ProxyFix
 
 # Load .env file if present (python-dotenv is in requirements)
 try:
@@ -25,6 +26,11 @@ except ImportError:
 DB_PATH = os.path.join(os.path.dirname(__file__), "ap.db")
 SECRET_KEY = os.environ.get("SECRET_KEY", "jcc-ap-dev-secret-change-in-prod")
 PORT = int(os.environ.get("PORT", 5000))
+
+# Base URL for generating links in emails (e.g. the public deployment URL)
+# Set this as an environment variable on production (e.g. https://jcocaccountspayable.onrender.com)
+# If not set, falls back to the incoming request's host (works for local dev)
+BASE_URL = os.environ.get("BASE_URL")
 
 # SMTP configuration for Johnson Church of Christ
 # These values are set as defaults. They can be overridden by environment variables or .env file.
@@ -39,6 +45,9 @@ SMTP_CONFIG = {
 
 app = Flask(__name__)
 app.config["SECRET_KEY"] = SECRET_KEY
+
+# Trust proxy headers (important for Render, Heroku, etc. so request.host_url and scheme are correct)
+app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
 
 # ---------- DB HELPERS ----------
 def get_db():
@@ -456,7 +465,10 @@ def send_email(to_email, subject, text_body, html_body=None):
     return status
 
 def build_approval_email(request_row, gl_row, requester, approver, step_label, next_approver_name=None):
-    base_url = request.host_url.rstrip("/")
+    if BASE_URL:
+        base_url = BASE_URL.rstrip("/")
+    else:
+        base_url = request.host_url.rstrip("/")
     token = create_or_get_token(request_row["id"], request_row["current_step"], approver["id"])
 
     approve_url = f"{base_url}/approve/{token}"
