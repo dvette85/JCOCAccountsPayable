@@ -23,7 +23,7 @@ except ImportError:
     pass
 
 # ---------- CONFIG ----------
-DB_PATH = os.path.join(os.path.dirname(__file__), "ap.db")
+DB_PATH = os.path.join("/data", "ap.db")
 SECRET_KEY = os.environ.get("SECRET_KEY", "jcc-ap-dev-secret-change-in-prod")
 PORT = int(os.environ.get("PORT", 5000))
 
