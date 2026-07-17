@@ -6,11 +6,14 @@ Works great on desktop browsers and mobile devices (responsive Tailwind UI).
 
 ## Features
 
+- **Login / Authentication**: Session-based sign-in. All screens and APIs require a logged-in user (Approve/Reject email links stay public via secure tokens).
 - **Invoice/Request Entry**: Key new AP requests with vendor, amount, dates, description, GL coding, and requester.
 - **Edit Requests**: Edit pending requests.
+- **Delete Requests**: Remove requests from Status & Lookup (table, mobile cards, and detail modal), including approval history and pending tokens.
 - **General Ledger Management**: Add/Edit/Remove GL accounts (seeded from provided Account List). Assign Primary, Secondary, Tertiary approvers per account (from user dropdown).
-- **Users Management**: Add/Edit/Remove users (username, first/last name, email).
+- **Users Management**: Add/Edit/Remove users (username, first/last name, email, password for login).
 - **Status & Lookup**: View all requests with status (Pending/Approved/Rejected), progress through approval chain. Filter by date range, account, description/vendor, status. Export to CSV.
+- **iOS / Mobile**: Optimized for iPhone Safari (safe areas, touch targets, no input zoom, sticky header, bottom-sheet style modals).
 - **Automated Email Workflow**:
   - On keying a request, it is routed to the first approver (Primary) via email.
   - Email contains full request details + "Approve" and "Reject" buttons (links).
@@ -32,7 +35,7 @@ Works great on desktop browsers and mobile devices (responsive Tailwind UI).
 
 ```powershell
 python -m venv .venv
-.\.venv\Scripts\Activate.ps1
+.\ .venv\Scripts\Activate.ps1
 ```
 
 3. Install dependencies:
@@ -41,13 +44,56 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
-4. Run the app:
+4. Run the app (local development on Windows):
 
 ```powershell
 python app.py
 ```
 
+   **Note:** Do **not** use `gunicorn` on Windows for local development — it is for Linux production servers.
+
 5. Open browser to: http://127.0.0.1:5000
+
+6. **Sign in** with a user account. Seeded demo users use password `jccpass` (e.g. username `jtreasurer`).
+
+### Production / Deployment Run (Linux servers like Render, Railway, etc.)
+
+Make sure `gunicorn` is installed (it's in requirements.txt).
+
+```bash
+gunicorn app:app
+```
+
+Or with workers:
+
+```bash
+gunicorn -w 4 app:app
+```
+
+For platforms like Render:
+
+- Build command: `pip install -r requirements.txt`
+- Start command: `gunicorn app:app`
+
+**Important for email links:**
+
+Set an environment variable `BASE_URL` to your public URL so that Approve/Reject links in emails point to the live site instead of localhost:
+
+```
+BASE_URL=https://jcocaccountspayable.onrender.com
+```
+
+You can also set other SMTP variables the same way on Render (don't rely on a local .env file in production).
+
+**Important:** Commit your changes to GitHub and trigger a new deploy after editing requirements.txt.
+
+### Running on Windows (alternative to gunicorn)
+
+If you need a production-style server on Windows:
+
+```powershell
+waitress-serve --listen=0.0.0.0:5000 app:app
+```
 
 The app will auto-create `ap.db` SQLite database on first run and seed:
 
@@ -76,8 +122,17 @@ The app will auto-create `ap.db` SQLite database on first run and seed:
 - Columns include current status and progress (e.g. "Pending - Awaiting Secondary (Name)").
 - Filters: Date range, Account #, free text search (vendor/desc), status.
 - Export CSV of current view.
-- Click "View/Edit" on a request to see details or modify if still Pending.
+- Click **View** on a request to see details or modify if still Pending.
+- Click the **trash** icon (or **Delete** in the detail modal) to permanently remove a request.
 - From details you can also see full approval chain.
+
+### Authentication
+- Visit the app → you are redirected to **Sign in** if not logged in.
+- Users are managed under the **Users** screen; set a password when adding a user.
+- Seeded sample users (first run only) use password **`jccpass`**.
+- Existing users without a password are given `jccpass` automatically on startup.
+- Email **Approve** / **Reject** links still work without logging in (token-based).
+- Use **Sign out** in the header (or mobile menu) to end your session.
 
 ### 5. Approval via Email (or direct links)
 - Approval request emails are sent in real time to the assigned approvers.
@@ -149,9 +204,15 @@ If emails fail, check the console output and the Email Log for the error message
 - `ap.db` : SQLite file created next to app.py
 - You can inspect it with DB Browser for SQLite or `sqlite3 ap.db`
 
+## iOS / Mobile Tips
+- Works as a mobile web app in Safari; you can use **Share → Add to Home Screen** for an app-like icon.
+- Layout respects iPhone safe areas (notch / home indicator).
+- Form fields use 16px text so iOS does not auto-zoom on focus.
+- Touch targets are enlarged for reliable taps.
+
 ## Notes / Future Enhancements
 - Attachments: Currently description/notes field. Can extend for file uploads.
-- Full user login/auth for UI: Currently open for simplicity (internal use).
+- Role-based permissions (e.g. restrict user/GL admin to treasurers).
 - Notifications on final approval.
 - Dashboard stats.
 - Budget vs actual (future).
