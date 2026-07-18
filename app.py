@@ -6,15 +6,17 @@ Desktop + Mobile friendly.
 """
 
 import os
+import re
 import sqlite3
 import uuid
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 from functools import wraps
-from flask import Flask, request, jsonify, render_template, redirect, url_for, send_file, g, session
+from flask import Flask, request, jsonify, render_template, redirect, url_for, send_file, g, session, abort
 import io
 import csv
 from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.middleware.proxy_fix import ProxyFix
+from werkzeug.utils import secure_filename
 
 # Load .env file if present (python-dotenv is in requirements)
 try:
@@ -25,10 +27,24 @@ except ImportError:
 
 # ---------- CONFIG ----------
 # Prefer persistent disk on Render (/data); fall back to local folder for development
-_default_db = os.path.join("/data", "ap.db") if os.path.isdir("/data") else os.path.join(os.path.dirname(__file__), "ap.db")
+_APP_DIR = os.path.dirname(os.path.abspath(__file__))
+_default_db = os.path.join("/data", "ap.db") if os.path.isdir("/data") else os.path.join(_APP_DIR, "ap.db")
 DB_PATH = os.environ.get("DB_PATH", _default_db)
 SECRET_KEY = os.environ.get("SECRET_KEY", "jcc-ap-dev-secret-change-in-prod")
 PORT = int(os.environ.get("PORT", 5000))
+
+# File uploads (attachments on requests)
+_default_upload = os.path.join("/data", "uploads") if os.path.isdir("/data") else os.path.join(_APP_DIR, "uploads")
+UPLOAD_FOLDER = os.environ.get("UPLOAD_FOLDER", _default_upload)
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+ALLOWED_EXTENSIONS = {
+    "pdf", "png", "jpg", "jpeg", "gif", "webp", "heic",
+    "doc", "docx", "xls", "xlsx", "csv", "txt", "zip",
+}
+MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", 15))
+
+ROLE_ADMIN = "Administrator"
+ROLE_USER = "User"
 
 # Base URL for generating links in emails (e.g. the public deployment URL)
 # Set this as an environment variable on production (e.g. https://jcocaccountspayable.onrender.com)
@@ -69,6 +85,8 @@ PUBLIC_ENDPOINTS = {
     "logout",
     "approve_link",
     "reject_link",
+    "forgot_password",
+    "reset_password",
     "static",
 }
 
@@ -110,6 +128,96 @@ def current_user():
     return get_user(uid)
 
 
+def is_admin(user=None):
+    u = user if user is not None else current_user()
+    return bool(u and u.get("role") == ROLE_ADMIN)
+
+
+def require_admin_api():
+    """Return a 403 JSON response if current user is not Administrator, else None."""
+    if not is_admin():
+        return jsonify({"error": "Administrator access required"}), 403
+    return None
+
+
+def split_gl_name(name):
+    """Split 'CATEGORY:Account Name' into (category, account_name)."""
+    if not name:
+        return "", ""
+    if ":" in name:
+        left, right = name.split(":", 1)
+        return left.strip(), right.strip()
+    return "", name.strip()
+
+
+def compose_gl_name(category, account_name):
+    category = (category or "").strip()
+    account_name = (account_name or "").strip()
+    if category and account_name:
+        return f"{category}:{account_name}"
+    return account_name or category
+
+
+def enrich_gl(d):
+    """Add category / account_name display fields from name."""
+    if not d:
+        return d
+    cat, aname = split_gl_name(d.get("name") or "")
+    d["category"] = cat
+    d["account_name"] = aname or (d.get("name") or "")
+    return d
+
+
+def user_can_view_request(user, req):
+    """User may view if admin, requester, on approval chain, or notify recipient."""
+    if not user or not req:
+        return False
+    if user.get("role") == ROLE_ADMIN:
+        return True
+    uid = user["id"]
+    if req.get("requested_by_id") == uid:
+        return True
+    if req.get("notify_user_id") == uid:
+        return True
+    for key in ("primary_approver_id", "secondary_approver_id", "tertiary_approver_id"):
+        if req.get(key) == uid:
+            return True
+    return False
+
+
+def user_can_approve_request(user, req):
+    """User may approve/reject if admin or current-step approver."""
+    if not user or not req or req.get("status") != "Pending":
+        return False
+    if user.get("role") == ROLE_ADMIN:
+        return True
+    step = req.get("current_step") or 1
+    keys = {1: "primary_approver_id", 2: "secondary_approver_id", 3: "tertiary_approver_id"}
+    return req.get(keys.get(step)) == user["id"]
+
+
+def user_can_edit_request(user, req):
+    if not user or not req or req.get("status") != "Pending":
+        return False
+    if user.get("role") == ROLE_ADMIN:
+        return True
+    return req.get("requested_by_id") == user["id"]
+
+
+def user_can_delete_request(user, req):
+    if not user or not req:
+        return False
+    if user.get("role") == ROLE_ADMIN:
+        return True
+    return req.get("requested_by_id") == user["id"] and req.get("status") == "Pending"
+
+
+def allowed_file(filename):
+    if not filename or "." not in filename:
+        return False
+    return filename.rsplit(".", 1)[1].lower() in ALLOWED_EXTENSIONS
+
+
 def ensure_user_passwords():
     """Give existing users without a password the default so they can log in."""
     db = get_db()
@@ -123,6 +231,59 @@ def ensure_user_passwords():
         cur.execute("UPDATE users SET password_hash=? WHERE id=?", (default_pw, row["id"]))
     db.commit()
     print(f"Set default password (jccpass) on {len(rows)} user(s) missing a password.")
+
+
+def ensure_user_roles():
+    """Ensure role column values are set; bootstrap first Administrator."""
+    db = get_db()
+    cur = db.cursor()
+    cur.execute("UPDATE users SET role=? WHERE role IS NULL OR role=''", (ROLE_USER,))
+    db.commit()
+
+    # Ensure Darron.Mitchell exists as Administrator
+    cur.execute(
+        "SELECT id, role, password_hash FROM users WHERE username = ? COLLATE NOCASE",
+        ("Darron.Mitchell",),
+    )
+    row = cur.fetchone()
+    default_pw = generate_password_hash("jccpass")
+    if row:
+        # Promote / refresh identity; keep existing password if already set
+        cur.execute(
+            "UPDATE users SET role=?, first_name=?, last_name=?, email=? WHERE id=?",
+            (ROLE_ADMIN, "Darron", "Mitchell", "Darron.Mitchell@hotmail.com", row["id"]),
+        )
+        if not row["password_hash"]:
+            cur.execute("UPDATE users SET password_hash=? WHERE id=?", (default_pw, row["id"]))
+        db.commit()
+    else:
+        try:
+            cur.execute("""
+                INSERT INTO users (username, first_name, last_name, email, password_hash, role)
+                VALUES (?, ?, ?, ?, ?, ?)
+            """, ("Darron.Mitchell", "Darron", "Mitchell", "Darron.Mitchell@hotmail.com", default_pw, ROLE_ADMIN))
+            db.commit()
+            print("Seeded administrator Darron.Mitchell (default password: jccpass).")
+        except sqlite3.IntegrityError:
+            # Email collision — promote by email if present
+            cur.execute("SELECT id FROM users WHERE email = ? COLLATE NOCASE", ("Darron.Mitchell@hotmail.com",))
+            r2 = cur.fetchone()
+            if r2:
+                cur.execute(
+                    "UPDATE users SET username=?, first_name=?, last_name=?, role=? WHERE id=?",
+                    ("Darron.Mitchell", "Darron", "Mitchell", ROLE_ADMIN, r2["id"]),
+                )
+                db.commit()
+
+    # If no administrator exists at all, promote first user
+    cur.execute("SELECT COUNT(*) as c FROM users WHERE role=?", (ROLE_ADMIN,))
+    if cur.fetchone()["c"] == 0:
+        cur.execute("SELECT id FROM users ORDER BY id LIMIT 1")
+        first = cur.fetchone()
+        if first:
+            cur.execute("UPDATE users SET role=? WHERE id=?", (ROLE_ADMIN, first["id"]))
+            db.commit()
+            print("Promoted first user to Administrator (no admin was present).")
 
 # ---------- DB HELPERS ----------
 def get_db():
@@ -151,15 +312,21 @@ def init_db():
             last_name TEXT NOT NULL,
             email TEXT UNIQUE NOT NULL,
             password_hash TEXT,
+            role TEXT DEFAULT 'User',
             created_at TEXT DEFAULT (datetime('now'))
         )
     """)
 
-    # Add password_hash column for existing databases (safe if column already exists)
-    try:
-        cur.execute("ALTER TABLE users ADD COLUMN password_hash TEXT")
-    except sqlite3.OperationalError:
-        pass  # column already exists
+    # Safe migrations for existing databases
+    for col_sql in (
+        "ALTER TABLE users ADD COLUMN password_hash TEXT",
+        "ALTER TABLE users ADD COLUMN role TEXT DEFAULT 'User'",
+        "ALTER TABLE requests ADD COLUMN notify_user_id INTEGER",
+    ):
+        try:
+            cur.execute(col_sql)
+        except sqlite3.OperationalError:
+            pass
 
     # GL Accounts
     cur.execute("""
@@ -190,6 +357,7 @@ def init_db():
             description TEXT,
             gl_account_id INTEGER NOT NULL,
             requested_by_id INTEGER NOT NULL,
+            notify_user_id INTEGER,
             status TEXT DEFAULT 'Pending',  -- Pending, Approved, Rejected
             current_step INTEGER DEFAULT 1,
             primary_approver_id INTEGER,
@@ -200,7 +368,37 @@ def init_db():
             rejected_at TEXT,
             reject_reason TEXT,
             FOREIGN KEY(gl_account_id) REFERENCES gl_accounts(id),
-            FOREIGN KEY(requested_by_id) REFERENCES users(id)
+            FOREIGN KEY(requested_by_id) REFERENCES users(id),
+            FOREIGN KEY(notify_user_id) REFERENCES users(id)
+        )
+    """)
+
+    # Request file attachments
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS request_attachments (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            request_id INTEGER NOT NULL,
+            original_filename TEXT NOT NULL,
+            stored_filename TEXT NOT NULL,
+            content_type TEXT,
+            size_bytes INTEGER,
+            uploaded_by_id INTEGER,
+            uploaded_at TEXT DEFAULT (datetime('now')),
+            FOREIGN KEY(request_id) REFERENCES requests(id),
+            FOREIGN KEY(uploaded_by_id) REFERENCES users(id)
+        )
+    """)
+
+    # Password reset tokens (forgot password)
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS password_reset_tokens (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            token TEXT UNIQUE NOT NULL,
+            expires_at TEXT NOT NULL,
+            used INTEGER DEFAULT 0,
+            created_at TEXT DEFAULT (datetime('now')),
+            FOREIGN KEY(user_id) REFERENCES users(id)
         )
     """)
 
@@ -252,23 +450,24 @@ def seed_data():
     db = get_db()
     cur = db.cursor()
 
-    # Seed sample users if none
+    # Seed sample users if none (roles applied by ensure_user_roles; Darron is admin)
     cur.execute("SELECT COUNT(*) as c FROM users")
     if cur.fetchone()["c"] == 0:
         default_pw = generate_password_hash("jccpass")
         sample_users = [
-            ("jtreasurer", "Jane", "Treasurer", "jane.treasurer@johnsoncoc.org", default_pw),
-            ("asmith", "Alex", "Smith", "alex.smith@johnsoncoc.org", default_pw),
-            ("bwilson", "Beth", "Wilson", "beth.wilson@johnsoncoc.org", default_pw),
-            ("rjohnson", "Robert", "Johnson", "robert.johnson@johnsoncoc.org", default_pw),
-            ("mmartinez", "Maria", "Martinez", "maria.martinez@johnsoncoc.org", default_pw),
+            ("Darron.Mitchell", "Darron", "Mitchell", "Darron.Mitchell@hotmail.com", default_pw, ROLE_ADMIN),
+            ("jtreasurer", "Jane", "Treasurer", "jane.treasurer@johnsoncoc.org", default_pw, ROLE_USER),
+            ("asmith", "Alex", "Smith", "alex.smith@johnsoncoc.org", default_pw, ROLE_USER),
+            ("bwilson", "Beth", "Wilson", "beth.wilson@johnsoncoc.org", default_pw, ROLE_USER),
+            ("rjohnson", "Robert", "Johnson", "robert.johnson@johnsoncoc.org", default_pw, ROLE_USER),
+            ("mmartinez", "Maria", "Martinez", "maria.martinez@johnsoncoc.org", default_pw, ROLE_USER),
         ]
         cur.executemany(
-            "INSERT INTO users (username, first_name, last_name, email, password_hash) VALUES (?,?,?,?,?)",
+            "INSERT INTO users (username, first_name, last_name, email, password_hash, role) VALUES (?,?,?,?,?,?)",
             sample_users
         )
         db.commit()
-        print("Seeded sample users (default password: jccpass).")
+        print("Seeded sample users (default password: jccpass). Admin: Darron.Mitchell")
 
     # Get user ids for approver assignment
     cur.execute("SELECT id, username FROM users ORDER BY id")
@@ -653,6 +852,8 @@ def get_user(user_id):
     if row:
         u = dict_from_row(row)
         u.pop("password_hash", None)
+        if not u.get("role"):
+            u["role"] = ROLE_USER
         return u
     return None
 
@@ -661,7 +862,39 @@ def get_gl(gl_id):
     cur = db.cursor()
     cur.execute("SELECT * FROM gl_accounts WHERE id=?", (gl_id,))
     row = cur.fetchone()
-    return dict_from_row(row) if row else None
+    return enrich_gl(dict_from_row(row)) if row else None
+
+
+def list_attachments(request_id):
+    db = get_db()
+    cur = db.cursor()
+    cur.execute(
+        "SELECT id, request_id, original_filename, content_type, size_bytes, uploaded_by_id, uploaded_at "
+        "FROM request_attachments WHERE request_id=? ORDER BY uploaded_at",
+        (request_id,),
+    )
+    return [dict_from_row(r) for r in cur.fetchall()]
+
+
+def send_approval_complete_notice(req, gl, recipient):
+    if not recipient:
+        return
+    subject = f"AP Request #{req['id']} FULLY APPROVED - {req['vendor']}"
+    body = f"""Hello {recipient['first_name']},
+
+Good news — AP request #{req['id']} has received all required approvals and is now APPROVED.
+
+Request #{req['id']}
+Vendor: {req['vendor']}
+Amount: ${req['amount']:.2f}
+GL Account: {gl['account_number'] if gl else ''} - {gl['name'] if gl else ''}
+
+Approved on: {datetime.now().strftime('%Y-%m-%d %H:%M')}
+
+Thank you,
+Johnson Church of Christ
+"""
+    send_email(recipient["email"], subject, body)
 
 def get_request(req_id):
     db = get_db()
@@ -794,24 +1027,11 @@ Johnson Church of Christ AP System
         """, (next_step, request_id))
         db.commit()
 
-        # Notify requester of completion (optional)
-        if requester:
-            subject = f"AP Request #{request_id} FULLY APPROVED - {req['vendor']}"
-            body = f"""Hello {requester['first_name']},
-
-Good news — your AP request has received all required approvals and is now APPROVED.
-
-Request #{request_id}
-Vendor: {req['vendor']}
-Amount: ${req['amount']:.2f}
-GL Account: {gl['account_number']} - {gl['name']}
-
-Approved on: {datetime.now().strftime('%Y-%m-%d %H:%M')}
-
-Thank you,
-Johnson Church of Christ
-"""
-            send_email(requester["email"], subject, body)
+        # Notify requester and optional additional notice recipient
+        send_approval_complete_notice(req, gl, requester)
+        notify_extra = get_user(req.get("notify_user_id")) if req.get("notify_user_id") else None
+        if notify_extra and (not requester or notify_extra["id"] != requester["id"]):
+            send_approval_complete_notice(req, gl, notify_extra)
         return True, "Request fully approved!"
 
     # Route to next
@@ -853,6 +1073,7 @@ def login():
             session["user_id"] = row["id"]
             session["username"] = row["username"]
             session["display_name"] = f"{row['first_name']} {row['last_name']}"
+            session["role"] = row["role"] if "role" in row.keys() and row["role"] else ROLE_USER
             session.permanent = bool(remember)
             next_url = request.args.get("next") or request.form.get("next") or url_for("index")
             # Prevent open redirect
@@ -862,7 +1083,7 @@ def login():
 
         error = "Invalid username or password."
 
-    return render_template("login.html", error=error, next=request.args.get("next", ""))
+    return render_template("login.html", error=error, next=request.args.get("next", ""), message=None)
 
 
 @app.route("/logout", methods=["GET", "POST"])
@@ -871,14 +1092,119 @@ def logout():
     return redirect(url_for("login"))
 
 
+@app.route("/forgot-password", methods=["GET", "POST"])
+def forgot_password():
+    message = None
+    error = None
+    if request.method == "POST":
+        identity = (request.form.get("username") or request.form.get("email") or "").strip()
+        # Always show the same success message (do not reveal whether the user exists)
+        message = "If an account matches that username or email, a reset link has been sent."
+        if identity:
+            db = get_db()
+            cur = db.cursor()
+            cur.execute(
+                "SELECT * FROM users WHERE username = ? COLLATE NOCASE OR email = ? COLLATE NOCASE",
+                (identity, identity),
+            )
+            row = cur.fetchone()
+            if row and row["email"]:
+                token = str(uuid.uuid4())
+                expires = (datetime.utcnow() + timedelta(hours=2)).strftime("%Y-%m-%d %H:%M:%S")
+                cur.execute(
+                    "INSERT INTO password_reset_tokens (user_id, token, expires_at) VALUES (?, ?, ?)",
+                    (row["id"], token, expires),
+                )
+                db.commit()
+                if BASE_URL:
+                    base = BASE_URL.rstrip("/")
+                else:
+                    base = request.host_url.rstrip("/")
+                reset_url = f"{base}/reset-password/{token}"
+                body = f"""Hello {row['first_name']},
+
+A password reset was requested for your Accounts Payable account ({row['username']}).
+
+Open this link within 2 hours to set a new password:
+{reset_url}
+
+If you did not request this, you can ignore this email.
+
+Johnson Church of Christ AP System
+"""
+                send_email(row["email"], "AP System password reset", body)
+    return render_template("login.html", mode="forgot", error=error, message=message, next="")
+
+
+@app.route("/reset-password/<token>", methods=["GET", "POST"])
+def reset_password(token):
+    db = get_db()
+    cur = db.cursor()
+    cur.execute(
+        "SELECT * FROM password_reset_tokens WHERE token=? AND used=0",
+        (token,),
+    )
+    row = cur.fetchone()
+    error = None
+    message = None
+    valid = False
+    if row:
+        try:
+            exp = datetime.strptime(row["expires_at"], "%Y-%m-%d %H:%M:%S")
+            valid = exp >= datetime.utcnow()
+        except ValueError:
+            valid = False
+    if not row or not valid:
+        return render_template(
+            "login.html",
+            mode="reset",
+            error="This reset link is invalid or has expired. Please request a new one.",
+            message=None,
+            token=token,
+            next="",
+        )
+
+    if request.method == "POST":
+        pw = request.form.get("password") or ""
+        pw2 = request.form.get("password_confirm") or ""
+        if len(pw) < 6:
+            error = "Password must be at least 6 characters."
+        elif pw != pw2:
+            error = "Passwords do not match."
+        else:
+            cur.execute(
+                "UPDATE users SET password_hash=? WHERE id=?",
+                (generate_password_hash(pw), row["user_id"]),
+            )
+            cur.execute("UPDATE password_reset_tokens SET used=1 WHERE id=?", (row["id"],))
+            db.commit()
+            return render_template(
+                "login.html",
+                mode="login",
+                error=None,
+                message="Password updated. You can sign in with your new password.",
+                next="",
+            )
+
+    return render_template(
+        "login.html", mode="reset", error=error, message=message, token=token, next=""
+    )
+
+
 @app.route("/")
 def index():
+    u = current_user() or {}
     return render_template(
         "index.html",
         current_user={
-            "id": session.get("user_id"),
-            "username": session.get("username"),
-            "display_name": session.get("display_name"),
+            "id": u.get("id") or session.get("user_id"),
+            "username": u.get("username") or session.get("username"),
+            "display_name": (
+                f"{u.get('first_name', '')} {u.get('last_name', '')}".strip()
+                or session.get("display_name")
+            ),
+            "role": u.get("role") or session.get("role") or ROLE_USER,
+            "email": u.get("email") or "",
         },
     )
 
@@ -889,6 +1215,30 @@ def api_me():
     if not u:
         return jsonify({"error": "Not authenticated"}), 401
     return jsonify(u)
+
+
+@app.route("/api/change_password", methods=["POST"])
+def api_change_password():
+    u = current_user()
+    if not u:
+        return jsonify({"error": "Not authenticated"}), 401
+    data = request.get_json() or {}
+    current_pw = data.get("current_password") or ""
+    new_pw = data.get("new_password") or ""
+    if len(new_pw) < 6:
+        return jsonify({"error": "New password must be at least 6 characters"}), 400
+    db = get_db()
+    cur = db.cursor()
+    cur.execute("SELECT password_hash FROM users WHERE id=?", (u["id"],))
+    row = cur.fetchone()
+    if not row or not check_password_hash(row["password_hash"] or "", current_pw):
+        return jsonify({"error": "Current password is incorrect"}), 400
+    cur.execute(
+        "UPDATE users SET password_hash=? WHERE id=?",
+        (generate_password_hash(new_pw), u["id"]),
+    )
+    db.commit()
+    return jsonify({"success": True, "message": "Password changed"})
 
 
 @app.route("/approve/<token>")
@@ -931,25 +1281,35 @@ def api_users():
     db = get_db()
     cur = db.cursor()
     if request.method == "GET":
+        # All authenticated users can list users (needed for dropdowns)
         cur.execute("SELECT * FROM users ORDER BY last_name, first_name")
         users = []
         for r in cur.fetchall():
             u = dict_from_row(r)
-            u.pop("password_hash", None)  # never expose hash
+            u.pop("password_hash", None)
+            if not u.get("role"):
+                u["role"] = ROLE_USER
             users.append(u)
         return jsonify(users)
+
+    denied = require_admin_api()
+    if denied:
+        return denied
 
     # POST create
     data = request.get_json() or request.form
     pw = (data.get("password") or "").strip()
     if not pw:
         return jsonify({"error": "Password is required for new users"}), 400
+    role = data.get("role") or ROLE_USER
+    if role not in (ROLE_ADMIN, ROLE_USER):
+        role = ROLE_USER
     pw_hash = generate_password_hash(pw)
     try:
         cur.execute("""
-            INSERT INTO users (username, first_name, last_name, email, password_hash)
-            VALUES (?, ?, ?, ?, ?)
-        """, (data["username"], data["first_name"], data["last_name"], data["email"], pw_hash))
+            INSERT INTO users (username, first_name, last_name, email, password_hash, role)
+            VALUES (?, ?, ?, ?, ?, ?)
+        """, (data["username"], data["first_name"], data["last_name"], data["email"], pw_hash, role))
         db.commit()
         uid = cur.lastrowid
         return jsonify(get_user(uid)), 201
@@ -964,8 +1324,14 @@ def api_user(user_id):
         u = get_user(user_id)
         return jsonify(u) if u else ("", 404)
 
+    denied = require_admin_api()
+    if denied:
+        return denied
+
     if request.method == "DELETE":
-        # Prevent delete if referenced? For simplicity allow, or cascade note
+        me = current_user()
+        if me and me["id"] == user_id:
+            return jsonify({"error": "You cannot delete your own account"}), 400
         cur.execute("DELETE FROM users WHERE id=?", (user_id,))
         db.commit()
         return "", 204
@@ -974,24 +1340,38 @@ def api_user(user_id):
     data = request.get_json() or {}
     fields = ["username", "first_name", "last_name", "email"]
     values = [data.get(f) for f in fields]
+    role = data.get("role") or ROLE_USER
+    if role not in (ROLE_ADMIN, ROLE_USER):
+        role = ROLE_USER
 
-    # Handle password update only if provided
+    # Prevent demoting the last administrator
+    if role != ROLE_ADMIN:
+        cur.execute("SELECT role FROM users WHERE id=?", (user_id,))
+        existing = cur.fetchone()
+        if existing and existing["role"] == ROLE_ADMIN:
+            cur.execute("SELECT COUNT(*) as c FROM users WHERE role=?", (ROLE_ADMIN,))
+            if cur.fetchone()["c"] <= 1:
+                return jsonify({"error": "Cannot remove the last Administrator"}), 400
+
     if data.get("password"):
-        cur.execute("SELECT password_hash FROM users WHERE id=?", (user_id,))
-        # keep existing if blank password sent, only update if non-empty
         pw_hash = generate_password_hash(data["password"])
         cur.execute("""
-            UPDATE users SET username=?, first_name=?, last_name=?, email=?, password_hash=?
+            UPDATE users SET username=?, first_name=?, last_name=?, email=?, password_hash=?, role=?
             WHERE id=?
-        """, (values[0], values[1], values[2], values[3], pw_hash, user_id))
+        """, (values[0], values[1], values[2], values[3], pw_hash, role, user_id))
     else:
         cur.execute("""
-            UPDATE users SET username=?, first_name=?, last_name=?, email=?
+            UPDATE users SET username=?, first_name=?, last_name=?, email=?, role=?
             WHERE id=?
-        """, (*values, user_id))
+        """, (*values, role, user_id))
 
     db.commit()
     return jsonify(get_user(user_id))
+
+def _gl_name_from_payload(data):
+    if data.get("category") is not None or data.get("account_name") is not None:
+        return compose_gl_name(data.get("category"), data.get("account_name") or data.get("name"))
+    return data.get("name") or ""
 
 @app.route("/api/gl_accounts", methods=["GET", "POST"])
 def api_gl():
@@ -1011,21 +1391,26 @@ def api_gl():
         """)
         rows = []
         for r in cur.fetchall():
-            d = dict_from_row(r)
+            d = enrich_gl(dict_from_row(r))
             d["primary_name"] = r["primary_name"]
             d["secondary_name"] = r["secondary_name"]
             d["tertiary_name"] = r["tertiary_name"]
             rows.append(d)
         return jsonify(rows)
 
+    denied = require_admin_api()
+    if denied:
+        return denied
+
     # POST create
     data = request.get_json()
+    name = _gl_name_from_payload(data)
     cur.execute("""
         INSERT INTO gl_accounts (account_number, name, description, is_expense,
                                  primary_approver_id, secondary_approver_id, tertiary_approver_id)
         VALUES (?, ?, ?, ?, ?, ?, ?)
     """, (
-        data["account_number"], data["name"], data.get("description", ""),
+        data["account_number"], name, data.get("description", ""),
         1 if data.get("is_expense", True) else 0,
         data.get("primary_approver_id"), data.get("secondary_approver_id"), data.get("tertiary_approver_id")
     ))
@@ -1037,7 +1422,12 @@ def api_gl_one(gl_id):
     db = get_db()
     cur = db.cursor()
     if request.method == "GET":
-        return jsonify(get_gl(gl_id) or ("", 404))
+        gl = get_gl(gl_id)
+        return jsonify(gl) if gl else ("", 404)
+
+    denied = require_admin_api()
+    if denied:
+        return denied
 
     if request.method == "DELETE":
         cur.execute("DELETE FROM gl_accounts WHERE id=?", (gl_id,))
@@ -1045,13 +1435,14 @@ def api_gl_one(gl_id):
         return "", 204
 
     data = request.get_json()
+    name = _gl_name_from_payload(data)
     cur.execute("""
         UPDATE gl_accounts SET
             account_number=?, name=?, description=?, is_expense=?,
             primary_approver_id=?, secondary_approver_id=?, tertiary_approver_id=?
         WHERE id=?
     """, (
-        data["account_number"], data["name"], data.get("description", ""),
+        data["account_number"], name, data.get("description", ""),
         1 if data.get("is_expense", True) else 0,
         data.get("primary_approver_id"), data.get("secondary_approver_id"), data.get("tertiary_approver_id"),
         gl_id
@@ -1063,24 +1454,30 @@ def api_gl_one(gl_id):
 def api_requests():
     db = get_db()
     cur = db.cursor()
+    me = current_user()
 
     if request.method == "POST":
-        data = request.get_json()
-        # Create
+        data = request.get_json() or {}
+        # Non-admins may only create requests as themselves
+        requested_by = int(data.get("requested_by_id") or (me["id"] if me else 0))
+        if me and not is_admin(me):
+            requested_by = me["id"]
+        notify_user_id = data.get("notify_user_id")
+        notify_user_id = int(notify_user_id) if notify_user_id else None
+
         cur.execute("""
             INSERT INTO requests (
                 vendor, invoice_number, invoice_date, amount, description,
-                gl_account_id, requested_by_id, status, current_step
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, 'Pending', 1)
+                gl_account_id, requested_by_id, notify_user_id, status, current_step
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'Pending', 1)
         """, (
             data["vendor"], data.get("invoice_number"),
             data.get("invoice_date"), float(data["amount"]), data.get("description", ""),
-            int(data["gl_account_id"]), int(data["requested_by_id"])
+            int(data["gl_account_id"]), requested_by, notify_user_id
         ))
         req_id = cur.lastrowid
         db.commit()
 
-        # Snapshot approvers from GL
         gl = get_gl(int(data["gl_account_id"]))
         if gl:
             cur.execute("""
@@ -1092,9 +1489,7 @@ def api_requests():
             """, (gl.get("primary_approver_id"), gl.get("secondary_approver_id"), gl.get("tertiary_approver_id"), req_id))
             db.commit()
 
-        # Start workflow (send to first approver)
         start_workflow(req_id)
-
         return jsonify(get_request(req_id)), 201
 
     # GET with optional filters
@@ -1127,6 +1522,14 @@ def api_requests():
         where.append("g.account_number LIKE ?")
         params.append(f"%{acct}%")
 
+    # Non-admins only see related requests
+    if me and not is_admin(me):
+        where.append("""(
+            r.requested_by_id = ? OR r.notify_user_id = ?
+            OR r.primary_approver_id = ? OR r.secondary_approver_id = ? OR r.tertiary_approver_id = ?
+        )""")
+        params.extend([me["id"], me["id"], me["id"], me["id"], me["id"]])
+
     sql = """
         SELECT r.*, 
                g.account_number, g.name as gl_name,
@@ -1144,7 +1547,6 @@ def api_requests():
     results = []
     for row in cur.fetchall():
         d = dict_from_row(row)
-        # compute display status / progress
         chain_info = []
         for step, key in enumerate(["primary_approver_id", "secondary_approver_id", "tertiary_approver_id"], 1):
             aid = row[key]
@@ -1157,7 +1559,14 @@ def api_requests():
                         "approved": step < d["current_step"] or (d["status"] == "Approved")
                     })
         d["approver_chain"] = chain_info
+        cat, aname = split_gl_name(row["gl_name"] or "")
+        d["gl_category"] = cat
+        d["gl_account_name"] = aname or row["gl_name"]
         d["gl_display"] = f"{row['account_number']} - {row['gl_name']}"
+        d["attachments"] = list_attachments(d["id"])
+        d["can_edit"] = user_can_edit_request(me, d)
+        d["can_approve"] = user_can_approve_request(me, d)
+        d["can_delete"] = user_can_delete_request(me, d)
         results.append(d)
     return jsonify(results)
 
@@ -1165,62 +1574,177 @@ def api_requests():
 def api_request_detail(req_id):
     db = get_db()
     cur = db.cursor()
+    me = current_user()
     if request.method == "GET":
         req = get_request(req_id)
         if not req:
             return "", 404
-        # enrich
+        if not user_can_view_request(me, req):
+            return jsonify({"error": "Not authorized to view this request"}), 403
         req["gl"] = get_gl(req["gl_account_id"])
         req["requester"] = get_user(req["requested_by_id"])
+        req["notify_user"] = get_user(req.get("notify_user_id")) if req.get("notify_user_id") else None
         cur.execute("SELECT * FROM approval_history WHERE request_id=? ORDER BY acted_at", (req_id,))
         req["history"] = [dict_from_row(h) for h in cur.fetchall()]
+        req["attachments"] = list_attachments(req_id)
+        req["can_edit"] = user_can_edit_request(me, req)
+        req["can_approve"] = user_can_approve_request(me, req)
+        req["can_delete"] = user_can_delete_request(me, req)
         return jsonify(req)
 
     if request.method == "DELETE":
         req = get_request(req_id)
         if not req:
             return jsonify({"error": "Request not found"}), 404
-        # Cascade related records so FK integrity stays clean
+        if not user_can_delete_request(me, req):
+            return jsonify({"error": "Not authorized to delete this request"}), 403
+        for att in list_attachments(req_id):
+            cur.execute("SELECT stored_filename FROM request_attachments WHERE id=?", (att["id"],))
+            arow = cur.fetchone()
+            if arow:
+                path = os.path.join(UPLOAD_FOLDER, arow["stored_filename"])
+                if os.path.isfile(path):
+                    try:
+                        os.remove(path)
+                    except OSError:
+                        pass
+        cur.execute("DELETE FROM request_attachments WHERE request_id=?", (req_id,))
         cur.execute("DELETE FROM approval_history WHERE request_id=?", (req_id,))
         cur.execute("DELETE FROM pending_approvals WHERE request_id=?", (req_id,))
         cur.execute("DELETE FROM requests WHERE id=?", (req_id,))
         db.commit()
         return "", 204
 
-    # PUT edit (only if pending)
-    data = request.get_json()
+    # PUT edit (only if pending + authorized)
+    data = request.get_json() or {}
     req = get_request(req_id)
     if not req or req["status"] != "Pending":
         return jsonify({"error": "Can only edit pending requests"}), 400
+    if not user_can_edit_request(me, req):
+        return jsonify({"error": "Not authorized to edit this request"}), 403
+
+    requested_by = int(data.get("requested_by_id") or req["requested_by_id"])
+    if me and not is_admin(me):
+        requested_by = me["id"]
+    notify_user_id = data.get("notify_user_id")
+    notify_user_id = int(notify_user_id) if notify_user_id else None
 
     cur.execute("""
         UPDATE requests SET
             vendor=?, invoice_number=?, invoice_date=?, amount=?, description=?,
-            gl_account_id=?, requested_by_id=?
+            gl_account_id=?, requested_by_id=?, notify_user_id=?
         WHERE id=?
     """, (
         data["vendor"], data.get("invoice_number"), data.get("invoice_date"),
         float(data["amount"]), data.get("description", ""),
-        int(data["gl_account_id"]), int(data["requested_by_id"]), req_id
+        int(data["gl_account_id"]), requested_by, notify_user_id, req_id
     ))
     db.commit()
     return jsonify(get_request(req_id))
 
+@app.route("/api/requests/<int:req_id>/attachments", methods=["GET", "POST"])
+def api_request_attachments(req_id):
+    me = current_user()
+    req = get_request(req_id)
+    if not req:
+        return jsonify({"error": "Request not found"}), 404
+    if not user_can_view_request(me, req):
+        return jsonify({"error": "Not authorized"}), 403
+
+    if request.method == "GET":
+        return jsonify(list_attachments(req_id))
+
+    # POST upload — requester, approvers on chain, or admin
+    if not (is_admin(me) or user_can_edit_request(me, req) or user_can_approve_request(me, req) or user_can_view_request(me, req)):
+        return jsonify({"error": "Not authorized to attach files"}), 403
+    if "file" not in request.files:
+        return jsonify({"error": "No file provided"}), 400
+    f = request.files["file"]
+    if not f or not f.filename:
+        return jsonify({"error": "No file selected"}), 400
+    if not allowed_file(f.filename):
+        return jsonify({"error": "File type not allowed"}), 400
+
+    original = secure_filename(f.filename)
+    ext = original.rsplit(".", 1)[-1].lower() if "." in original else "bin"
+    stored = f"{req_id}_{uuid.uuid4().hex}.{ext}"
+    path = os.path.join(UPLOAD_FOLDER, stored)
+    f.save(path)
+    size = os.path.getsize(path)
+    if size > MAX_UPLOAD_MB * 1024 * 1024:
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+        return jsonify({"error": f"File exceeds {MAX_UPLOAD_MB} MB limit"}), 400
+
+    db = get_db()
+    cur = db.cursor()
+    cur.execute("""
+        INSERT INTO request_attachments
+            (request_id, original_filename, stored_filename, content_type, size_bytes, uploaded_by_id)
+        VALUES (?, ?, ?, ?, ?, ?)
+    """, (req_id, original, stored, f.mimetype, size, me["id"] if me else None))
+    db.commit()
+    return jsonify(list_attachments(req_id)[-1]), 201
+
+
+@app.route("/api/attachments/<int:att_id>", methods=["GET", "DELETE"])
+def api_attachment(att_id):
+    me = current_user()
+    db = get_db()
+    cur = db.cursor()
+    cur.execute("SELECT * FROM request_attachments WHERE id=?", (att_id,))
+    att = cur.fetchone()
+    if not att:
+        return jsonify({"error": "Attachment not found"}), 404
+    req = get_request(att["request_id"])
+    if not user_can_view_request(me, req):
+        return jsonify({"error": "Not authorized"}), 403
+
+    if request.method == "DELETE":
+        if not (is_admin(me) or user_can_edit_request(me, req)):
+            return jsonify({"error": "Not authorized to delete attachment"}), 403
+        path = os.path.join(UPLOAD_FOLDER, att["stored_filename"])
+        if os.path.isfile(path):
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+        cur.execute("DELETE FROM request_attachments WHERE id=?", (att_id,))
+        db.commit()
+        return "", 204
+
+    path = os.path.join(UPLOAD_FOLDER, att["stored_filename"])
+    if not os.path.isfile(path):
+        return jsonify({"error": "File missing on server"}), 404
+    return send_file(
+        path,
+        mimetype=att["content_type"] or "application/octet-stream",
+        as_attachment=True,
+        download_name=att["original_filename"],
+    )
+
+
 @app.route("/api/requests/<int:req_id>/manual_action", methods=["POST"])
 def api_manual_action(req_id):
-    """Allow UI to manually approve/reject (useful for testing or if email unavailable)."""
-    data = request.get_json()
+    """Allow UI to manually approve/reject when the current user is authorized."""
+    me = current_user()
+    data = request.get_json() or {}
     action = data.get("action")  # "approve" or "reject"
     notes = data.get("notes")
-    # For manual we need to know which approver. Use provided or pick current.
-    approver_id = data.get("approver_id")
-    if not approver_id:
-        req = get_request(req_id)
-        gl = get_gl(req["gl_account_id"])
-        chain = get_approver_chain(gl) if gl else []
-        idx = req["current_step"] - 1
-        if 0 <= idx < len(chain):
-            approver_id = chain[idx]["id"]
+    req = get_request(req_id)
+    if not req:
+        return jsonify({"error": "Request not found"}), 404
+    if not user_can_approve_request(me, req):
+        return jsonify({"error": "Not authorized to approve/reject this request"}), 403
+
+    approver_id = data.get("approver_id") or (me["id"] if me else None)
+    if is_admin(me) and not data.get("approver_id"):
+        # Admin acting as current-step approver when not on chain
+        keys = {1: "primary_approver_id", 2: "secondary_approver_id", 3: "tertiary_approver_id"}
+        step_key = keys.get(req.get("current_step") or 1)
+        approver_id = req.get(step_key) or me["id"]
 
     if not approver_id:
         return jsonify({"error": "No approver specified and none found in chain"}), 400
@@ -1236,8 +1760,8 @@ def api_export():
     """CSV export of requests (respecting simple filters via query params)."""
     db = get_db()
     cur = db.cursor()
+    me = current_user()
 
-    # Reuse same filter logic as GET /api/requests but simpler
     where = []
     params = []
     if request.args.get("status") and request.args.get("status") != "All":
@@ -1256,6 +1780,13 @@ def api_export():
     if request.args.get("account_number"):
         where.append("g.account_number LIKE ?")
         params.append(f"%{request.args.get('account_number')}%")
+
+    if me and not is_admin(me):
+        where.append("""(
+            r.requested_by_id = ? OR r.notify_user_id = ?
+            OR r.primary_approver_id = ? OR r.secondary_approver_id = ? OR r.tertiary_approver_id = ?
+        )""")
+        params.extend([me["id"], me["id"], me["id"], me["id"], me["id"]])
 
     sql = """
         SELECT r.id, r.created_at, r.invoice_date, r.vendor, r.invoice_number,
@@ -1291,6 +1822,9 @@ def api_export():
 
 @app.route("/api/email_log")
 def api_email_log():
+    denied = require_admin_api()
+    if denied:
+        return denied
     db = get_db()
     cur = db.cursor()
     cur.execute("SELECT * FROM email_log ORDER BY sent_at DESC LIMIT 100")
@@ -1300,11 +1834,22 @@ def api_email_log():
 def api_stats():
     db = get_db()
     cur = db.cursor()
-    cur.execute("SELECT status, COUNT(*) as cnt FROM requests GROUP BY status")
-    by_status = {r["status"]: r["cnt"] for r in cur.fetchall()}
-
-    cur.execute("SELECT COUNT(*) as total FROM requests")
-    total = cur.fetchone()["total"]
+    me = current_user()
+    if me and not is_admin(me):
+        scope = """(
+            requested_by_id = ? OR notify_user_id = ?
+            OR primary_approver_id = ? OR secondary_approver_id = ? OR tertiary_approver_id = ?
+        )"""
+        params = [me["id"], me["id"], me["id"], me["id"], me["id"]]
+        cur.execute(f"SELECT status, COUNT(*) as cnt FROM requests WHERE {scope} GROUP BY status", params)
+        by_status = {r["status"]: r["cnt"] for r in cur.fetchall()}
+        cur.execute(f"SELECT COUNT(*) as total FROM requests WHERE {scope}", params)
+        total = cur.fetchone()["total"]
+    else:
+        cur.execute("SELECT status, COUNT(*) as cnt FROM requests GROUP BY status")
+        by_status = {r["status"]: r["cnt"] for r in cur.fetchall()}
+        cur.execute("SELECT COUNT(*) as total FROM requests")
+        total = cur.fetchone()["total"]
 
     return jsonify({
         "total": total,
@@ -1313,11 +1858,15 @@ def api_stats():
 
 # ---------- INIT ----------
 def bootstrap_db():
-    """Create schema, seed demo data, ensure passwords exist (safe to call multiple times)."""
+    """Create schema, seed demo data, ensure passwords and roles exist."""
     init_db()
     seed_data()
     ensure_user_passwords()
+    ensure_user_roles()
+    os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
+
+app.config["MAX_CONTENT_LENGTH"] = MAX_UPLOAD_MB * 1024 * 1024
 
 # Run on import so gunicorn / waitress also initialize the database
 with app.app_context():
@@ -1327,6 +1876,7 @@ with app.app_context():
 if __name__ == "__main__":
     print(f"\nJohnson Church of Christ Accounts Payable System")
     print(f"Running at http://127.0.0.1:{PORT}")
-    print("Login required — seeded users use password: jccpass")
+    print("Login required — default password: jccpass")
+    print("Administrator: Darron.Mitchell")
     print("Open the URL above in your browser (desktop or mobile / iOS Safari).\n")
     app.run(host="0.0.0.0", port=PORT, debug=True)

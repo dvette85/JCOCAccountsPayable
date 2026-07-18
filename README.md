@@ -6,14 +6,14 @@ Works great on desktop browsers and mobile devices (responsive Tailwind UI).
 
 ## Features
 
-- **Login / Authentication**: Session-based sign-in. All screens and APIs require a logged-in user (Approve/Reject email links stay public via secure tokens).
-- **Invoice/Request Entry**: Key new AP requests with vendor, amount, dates, description, GL coding, and requester.
-- **Edit Requests**: Edit pending requests.
-- **Delete Requests**: Remove requests from Status & Lookup (table, mobile cards, and detail modal), including approval history and pending tokens.
-- **General Ledger Management**: Add/Edit/Remove GL accounts (seeded from provided Account List). Assign Primary, Secondary, Tertiary approvers per account (from user dropdown).
-- **Users Management**: Add/Edit/Remove users (username, first/last name, email, password for login).
-- **Status & Lookup**: View all requests with status (Pending/Approved/Rejected), progress through approval chain. Filter by date range, account, description/vendor, status. Export to CSV.
-- **iOS / Mobile**: Optimized for iPhone Safari (safe areas, touch targets, no input zoom, sticky header, bottom-sheet style modals).
+- **Login / Authentication**: Session-based sign-in; forgot-password email reset; change password when signed in. Approve/Reject email links stay public via tokens.
+- **Roles**: **Administrator** (full access) and **User** (only related requests). First admin: `Darron.Mitchell`. Roles editable on Users tab by admins.
+- **Invoice/Request Entry**: Vendor, amount, dates, description, GL, requester, optional **also-notify** user, optional **file attachment**.
+- **Edit / Delete Requests**: Pending edits; delete with permissions by role.
+- **General Ledger**: Category + account name (split on `:`), approvers per account. Admin-managed.
+- **Users Management**: Username, name, email, password, **role** (Administrator only).
+- **Status & Lookup**: Filterable list, progress, export, refresh; Users see only their related requests.
+- **iOS / Mobile**: Bottom tab bar on phones, safe areas, large touch targets, no input zoom.
 - **Automated Email Workflow**:
   - On keying a request, it is routed to the first approver (Primary) via email.
   - Email contains full request details + "Approve" and "Reject" buttons (links).
@@ -210,12 +210,19 @@ If emails fail, check the console output and the Email Log for the error message
 - Form fields use 16px text so iOS does not auto-zoom on focus.
 - Touch targets are enlarged for reliable taps.
 
+## Implemented product features (local)
+
+- **Roles**: Administrator vs User. Bootstrap admin: `Darron.Mitchell` / `jccpass` (`Darron.Mitchell@hotmail.com`). Users only see/act on related requests; admins manage GL, Users, Email Log.
+- **Password**: Change password (key icon in header); Forgot password on login (email link, 2-hour token).
+- **Attachments**: Optional file on New Request; upload/download from request detail (`uploads/` folder).
+- **Additional approved notice**: “Also notify when approved” on New Request; emailed on final approval with the requestor.
+- **iOS bottom nav**: Fixed bottom tab bar on phones (replaces hamburger).
+- **GL Category / Account name**: Split on `:` in GL table and edit form.
+
 ## Notes / Future Enhancements
-- Attachments: Currently description/notes field. Can extend for file uploads.
-- Role-based permissions (e.g. restrict user/GL admin to treasurers).
-- Notifications on final approval.
-- Dashboard stats.
-- Budget vs actual (future).
+- Budget vs actual.
+- Richer dashboard analytics.
+- Stricter attachment virus scanning / cloud storage for multi-instance deploys.
 
 ## Support
 For Johnson Church of Christ internal use.

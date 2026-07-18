@@ -150,16 +150,66 @@
       padding-bottom: calc(1.25rem + var(--safe-bottom));
     }
 
+    /* Mobile bottom tab bar (iOS-friendly) */
+    .bottom-nav {
+      display: none;
+    }
+    @media (max-width: 767px) {
+      .bottom-nav {
+        display: flex;
+        position: fixed;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        z-index: 60;
+        background: #fff;
+        border-top: 1px solid #e2e8f0;
+        padding: 4px 4px calc(4px + env(safe-area-inset-bottom, 0px));
+        justify-content: space-around;
+        box-shadow: 0 -4px 16px rgba(15, 23, 42, 0.06);
+      }
+      .bottom-nav button {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 2px;
+        min-height: 52px;
+        font-size: 10px;
+        font-weight: 600;
+        color: #64748b;
+        border: none;
+        background: transparent;
+        -webkit-tap-highlight-color: transparent;
+      }
+      .bottom-nav button i { font-size: 18px; }
+      .bottom-nav button.nav-active {
+        color: #1e40af;
+        background: #eff6ff;
+        border-radius: 10px;
+      }
+      .bottom-nav button.nav-active i { color: #1e40af; }
+      body { padding-bottom: calc(64px + env(safe-area-inset-bottom, 0px)); }
+      .app-footer { padding-bottom: calc(0.5rem + env(safe-area-inset-bottom)); }
+      /* Hide old hamburger + top mobile drawer on phones */
+      #mobile-nav-toggle,
+      #mobile-nav { display: none !important; }
+    }
+
     /* Bottom sheet style on small screens for modals */
     @media (max-width: 767px) {
       #request-modal > .modal,
       #gl-modal > .modal,
-      #user-modal > .modal {
+      #user-modal > .modal,
+      #password-modal > .modal {
         border-bottom-left-radius: 0;
         border-bottom-right-radius: 0;
         padding-bottom: var(--safe-bottom);
       }
     }
+
+    .admin-only.hidden-role { display: none !important; }
   </style>
 </head>
 <body class="bg-slate-50 text-slate-800">
@@ -194,17 +244,33 @@
           <div class="hidden sm:flex items-center gap-2 pl-2 border-l border-slate-200">
             <div class="text-right leading-tight">
               <div class="text-xs font-semibold text-slate-700 truncate max-w-[140px]" id="header-user-name">{{ current_user.display_name or current_user.username or 'User' }}</div>
-              <div class="text-[10px] text-slate-400">@{{ current_user.username or '' }}</div>
+              <div class="text-[10px] text-slate-400">
+                @{{ current_user.username or '' }}
+                · <span id="header-user-role">{{ current_user.role or 'User' }}</span>
+              </div>
             </div>
+            <button type="button" onclick="openPasswordModal()" class="tap-target inline-flex items-center justify-center px-3 py-2 text-xs font-medium text-slate-600 border border-slate-200 rounded-lg hover:bg-slate-50" title="Change password">
+              <i class="fa-solid fa-key"></i>
+            </button>
             <a href="/logout" class="tap-target inline-flex items-center justify-center px-3 py-2 text-xs font-medium text-slate-600 border border-slate-200 rounded-lg hover:bg-slate-50 active:bg-slate-100" title="Sign out">
               <i class="fa-solid fa-right-from-bracket"></i>
               <span class="ml-1.5 hidden lg:inline">Sign out</span>
             </a>
           </div>
 
-          <!-- Mobile nav toggle -->
-          <button type="button" onclick="toggleMobileNav()" 
-                  class="md:hidden tap-target w-11 h-11 flex items-center justify-center rounded-lg border border-slate-200 hover:bg-slate-100 active:bg-slate-200"
+          <!-- Mobile: change password + sign out (nav is bottom bar) -->
+          <div class="flex sm:hidden items-center gap-1.5">
+            <button type="button" onclick="openPasswordModal()" class="tap-target w-10 h-10 flex items-center justify-center rounded-lg border border-slate-200" title="Change password" aria-label="Change password">
+              <i class="fa-solid fa-key text-slate-600"></i>
+            </button>
+            <a href="/logout" class="tap-target w-10 h-10 flex items-center justify-center rounded-lg border border-slate-200" title="Sign out" aria-label="Sign out">
+              <i class="fa-solid fa-right-from-bracket text-slate-600"></i>
+            </a>
+          </div>
+
+          <!-- Legacy mobile nav toggle (hidden on phones via CSS; kept for tablets edge cases) -->
+          <button type="button" id="mobile-nav-toggle" onclick="toggleMobileNav()" 
+                  class="hidden tap-target w-11 h-11 items-center justify-center rounded-lg border border-slate-200 hover:bg-slate-100 active:bg-slate-200"
                   aria-label="Open menu">
             <i class="fa-solid fa-bars"></i>
           </button>
@@ -227,17 +293,17 @@
             <span>New Request</span>
           </button>
           <button onclick="showSection('gl')" 
-                  class="nav-item px-4 py-1.5 flex items-center gap-x-2 text-sm font-medium" id="nav-gl">
+                  class="nav-item admin-only px-4 py-1.5 flex items-center gap-x-2 text-sm font-medium" id="nav-gl">
             <i class="fa-solid fa-book w-4"></i>
             <span>General Ledger</span>
           </button>
           <button onclick="showSection('users')" 
-                  class="nav-item px-4 py-1.5 flex items-center gap-x-2 text-sm font-medium" id="nav-users">
+                  class="nav-item admin-only px-4 py-1.5 flex items-center gap-x-2 text-sm font-medium" id="nav-users">
             <i class="fa-solid fa-users w-4"></i>
             <span>Users</span>
           </button>
           <button onclick="showSection('emaillog')" 
-                  class="nav-item px-4 py-1.5 flex items-center gap-x-2 text-sm font-medium" id="nav-emaillog">
+                  class="nav-item admin-only px-4 py-1.5 flex items-center gap-x-2 text-sm font-medium" id="nav-emaillog">
             <i class="fa-solid fa-envelope w-4"></i>
             <span>Email Log</span>
           </button>
@@ -246,48 +312,73 @@
     </div>
   </header>
 
-  <!-- Mobile Nav -->
-  <div id="mobile-nav" class="hidden md:hidden border-b bg-white px-4 py-2">
+  <!-- Mobile Nav (legacy drawer; phones use bottom bar) -->
+  <div id="mobile-nav" class="hidden border-b bg-white px-4 py-2">
     <div class="flex flex-col text-sm">
-      <div class="px-3 py-2 mb-1 rounded-lg bg-slate-50 border border-slate-100 sm:hidden">
-        <div class="font-semibold text-slate-800">{{ current_user.display_name or current_user.username or 'User' }}</div>
-        <div class="text-xs text-slate-500">@{{ current_user.username or '' }}</div>
-      </div>
-      <button type="button" onclick="showSection('status');toggleMobileNav()" class="tap-target text-left py-3 px-3 hover:bg-slate-50 active:bg-slate-100 flex items-center gap-2 rounded-lg">
+      <button type="button" onclick="showSection('status');toggleMobileNav()" class="tap-target text-left py-3 px-3 hover:bg-slate-50 flex items-center gap-2 rounded-lg">
         <i class="fa-solid fa-list-check w-5 text-blue-700"></i> Status &amp; Lookup
       </button>
-      <button type="button" onclick="openNewRequest();toggleMobileNav()" class="tap-target text-left py-3 px-3 hover:bg-slate-50 active:bg-slate-100 flex items-center gap-2 rounded-lg">
+      <button type="button" onclick="openNewRequest();toggleMobileNav()" class="tap-target text-left py-3 px-3 hover:bg-slate-50 flex items-center gap-2 rounded-lg">
         <i class="fa-solid fa-plus w-5 text-blue-700"></i> New Request
       </button>
-      <button type="button" onclick="showSection('gl');toggleMobileNav()" class="tap-target text-left py-3 px-3 hover:bg-slate-50 active:bg-slate-100 flex items-center gap-2 rounded-lg">
+      <button type="button" onclick="showSection('gl');toggleMobileNav()" class="admin-only tap-target text-left py-3 px-3 hover:bg-slate-50 flex items-center gap-2 rounded-lg">
         <i class="fa-solid fa-book w-5 text-blue-700"></i> General Ledger
       </button>
-      <button type="button" onclick="showSection('users');toggleMobileNav()" class="tap-target text-left py-3 px-3 hover:bg-slate-50 active:bg-slate-100 flex items-center gap-2 rounded-lg">
+      <button type="button" onclick="showSection('users');toggleMobileNav()" class="admin-only tap-target text-left py-3 px-3 hover:bg-slate-50 flex items-center gap-2 rounded-lg">
         <i class="fa-solid fa-users w-5 text-blue-700"></i> Users
       </button>
-      <button type="button" onclick="showSection('emaillog');toggleMobileNav()" class="tap-target text-left py-3 px-3 hover:bg-slate-50 active:bg-slate-100 flex items-center gap-2 rounded-lg">
+      <button type="button" onclick="showSection('emaillog');toggleMobileNav()" class="admin-only tap-target text-left py-3 px-3 hover:bg-slate-50 flex items-center gap-2 rounded-lg">
         <i class="fa-solid fa-envelope w-5 text-blue-700"></i> Email Log
       </button>
-      <a href="/logout" class="tap-target text-left py-3 px-3 hover:bg-red-50 active:bg-red-100 flex items-center gap-2 rounded-lg text-red-700 mt-1 border-t border-slate-100">
-        <i class="fa-solid fa-right-from-bracket w-5"></i> Sign out
-      </a>
     </div>
   </div>
+
+  <!-- iOS / mobile bottom navigation -->
+  <nav class="bottom-nav" id="bottom-nav" aria-label="Main">
+    <button type="button" id="bnav-status" onclick="showSection('status')">
+      <i class="fa-solid fa-list-check"></i>
+      <span>Status</span>
+    </button>
+    <button type="button" id="bnav-new-request" onclick="openNewRequest()">
+      <i class="fa-solid fa-plus"></i>
+      <span>New</span>
+    </button>
+    <button type="button" id="bnav-gl" class="admin-only" onclick="showSection('gl')">
+      <i class="fa-solid fa-book"></i>
+      <span>GL</span>
+    </button>
+    <button type="button" id="bnav-users" class="admin-only" onclick="showSection('users')">
+      <i class="fa-solid fa-users"></i>
+      <span>Users</span>
+    </button>
+    <button type="button" id="bnav-emaillog" class="admin-only" onclick="showSection('emaillog')">
+      <i class="fa-solid fa-envelope"></i>
+      <span>Email</span>
+    </button>
+  </nav>
 
   <div class="max-w-screen-2xl mx-auto px-4 sm:px-6 py-5">
     
     <!-- STATUS & LOOKUP -->
     <div id="section-status" class="section active">
-      <div class="flex items-end justify-between mb-4">
+      <div class="flex items-end justify-between mb-4 gap-2">
         <div>
           <h1 class="text-2xl font-semibold tracking-tight">Status &amp; Lookup</h1>
           <p class="text-slate-500 text-sm">View requests, track approval progress, filter and export</p>
         </div>
-        <button onclick="exportCSV()" 
-                class="px-4 py-2 flex items-center gap-x-2 bg-white border border-slate-300 hover:bg-slate-50 text-sm font-medium rounded-lg shadow-sm">
-          <i class="fa-solid fa-download"></i>
-          <span class="hidden sm:inline">Export CSV</span>
-        </button>
+        <div class="flex items-center gap-2 shrink-0">
+          <button type="button" onclick="loadRequests()"
+                  class="tap-target px-4 py-2 flex items-center gap-x-2 bg-white border border-slate-300 hover:bg-slate-50 active:bg-slate-100 text-sm font-medium rounded-lg shadow-sm"
+                  title="Refresh list">
+            <i class="fa-solid fa-sync"></i>
+            <span class="hidden sm:inline">Refresh</span>
+          </button>
+          <button type="button" onclick="exportCSV()" 
+                  class="tap-target px-4 py-2 flex items-center gap-x-2 bg-white border border-slate-300 hover:bg-slate-50 active:bg-slate-100 text-sm font-medium rounded-lg shadow-sm">
+            <i class="fa-solid fa-download"></i>
+            <span class="hidden sm:inline">Export CSV</span>
+          </button>
+        </div>
       </div>
 
       <!-- Filters -->
@@ -431,6 +522,21 @@
                 <option value="">Select user...</option>
               </select>
             </div>
+
+            <div>
+              <label class="text-xs font-semibold text-slate-600">Also notify when approved</label>
+              <select id="req-notify-user" class="mt-1 w-full border border-slate-300 focus:border-blue-600 px-3 py-2 rounded-lg bg-white">
+                <option value="">— None —</option>
+              </select>
+              <div class="text-[10px] text-slate-400 mt-0.5">Optional extra person (besides the requestor) who receives the final approval email.</div>
+            </div>
+
+            <div class="sm:col-span-2">
+              <label class="text-xs font-semibold text-slate-600">Attachment (optional)</label>
+              <input id="req-attachment" type="file" class="mt-1 w-full text-sm border border-slate-300 rounded-lg px-3 py-2 bg-white"
+                     accept=".pdf,.png,.jpg,.jpeg,.gif,.webp,.doc,.docx,.xls,.xlsx,.csv,.txt,.zip,image/*">
+              <div class="text-[10px] text-slate-400 mt-0.5">Invoice PDF, photo, or receipt. You can also add files later from the request detail.</div>
+            </div>
           </div>
 
           <div class="flex gap-x-3 mt-7">
@@ -469,6 +575,7 @@
             <thead>
               <tr class="bg-slate-50 border-b text-xs text-left font-semibold text-slate-600">
                 <th class="px-5 py-3 w-20">Acct #</th>
+                <th class="px-4 py-3">Category</th>
                 <th class="px-4 py-3">Account Name</th>
                 <th class="px-4 py-3">Expense</th>
                 <th class="px-4 py-3">Primary Approver</th>
@@ -506,6 +613,7 @@
                 <th class="px-5 py-3 text-left">Username</th>
                 <th class="px-4 py-3 text-left">Name</th>
                 <th class="px-4 py-3 text-left">Email</th>
+                <th class="px-4 py-3 text-left">Role</th>
                 <th class="px-3 py-3 w-16 text-right">Actions</th>
               </tr>
             </thead>
@@ -529,10 +637,6 @@
       
       <div class="bg-white rounded-2xl border border-slate-200 shadow-sm p-1">
         <div id="email-log-list" class="divide-y max-h-[520px] overflow-auto text-sm"></div>
-      </div>
-      <div class="mt-2 text-xs text-amber-700 px-1">
-        <i class="fa-solid fa-info-circle"></i> 
-        Emails are simulated by default (shown here). Configure SMTP in <code>app.py</code> to send real emails.
       </div>
     </div>
   </div>
@@ -559,10 +663,17 @@
             </label>
           </div>
         </div>
+
+        <div>
+          <label class="text-xs font-semibold">Category</label>
+          <input id="gl-category" type="text" class="w-full mt-1 border border-slate-300 rounded-lg px-3 py-2 text-sm" placeholder="BUILDING AND GROUNDS">
+          <div class="text-[10px] text-slate-400 mt-0.5">Left side of the name (before the colon)</div>
+        </div>
         
         <div>
           <label class="text-xs font-semibold">Account Name *</label>
-          <input id="gl-name" type="text" class="w-full mt-1 border border-slate-300 rounded-lg px-3 py-2 text-sm" placeholder="BUILDING AND GROUNDS:Maintenance">
+          <input id="gl-name" type="text" class="w-full mt-1 border border-slate-300 rounded-lg px-3 py-2 text-sm" placeholder="Maintenance">
+          <div class="text-[10px] text-slate-400 mt-0.5">Right side of the name (after the colon). Stored as Category:Account Name when category is set.</div>
         </div>
         
         <div>
@@ -625,6 +736,14 @@
           <input id="user-email" type="email" class="w-full mt-1 border border-slate-300 rounded-lg px-3 py-2 text-sm" placeholder="name@johnsoncoc.org">
         </div>
         <div>
+          <label class="text-xs font-semibold">Role *</label>
+          <select id="user-role" class="w-full mt-1 border border-slate-300 rounded-lg px-3 py-2 text-sm bg-white">
+            <option value="User">User</option>
+            <option value="Administrator">Administrator</option>
+          </select>
+          <div class="text-[10px] text-slate-400 mt-0.5">Administrators have full access. Users only see related requests.</div>
+        </div>
+        <div>
           <label class="text-xs font-semibold">Password <span class="text-slate-400 text-[10px]">(required for new users; leave blank on edit to keep current)</span></label>
           <input id="user-password" type="password" autocomplete="new-password" class="w-full mt-1 border border-slate-300 rounded-lg px-3 py-2 text-sm" placeholder="••••••••" style="font-size:16px">
           <div class="text-[10px] text-amber-600 mt-0.5">Used to sign in to the AP system. Seeded users default: <span class="font-mono">jccpass</span></div>
@@ -633,6 +752,34 @@
       <div class="px-5 py-4 border-t flex justify-end gap-x-3 bg-slate-50 rounded-b-2xl">
         <button onclick="closeUserModal()" class="px-4 py-2 text-sm">Cancel</button>
         <button onclick="saveUser()" class="px-6 py-2 bg-blue-800 text-white text-sm font-semibold rounded-xl">Save User</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Change password modal -->
+  <div id="password-modal" class="hidden fixed inset-0 bg-black/40 flex items-center justify-center z-[100]" onclick="if (event.target.id === 'password-modal') closePasswordModal()">
+    <div onclick="event.stopImmediatePropagation()" class="modal bg-white w-full max-w-md mx-3 rounded-2xl shadow-xl border">
+      <div class="px-5 py-4 border-b flex items-center">
+        <div class="font-semibold text-lg">Change password</div>
+        <button type="button" onclick="closePasswordModal()" class="ml-auto text-2xl leading-none text-slate-400 hover:text-slate-700">&times;</button>
+      </div>
+      <div class="p-5 space-y-4">
+        <div>
+          <label class="text-xs font-semibold">Current password</label>
+          <input id="pw-current" type="password" autocomplete="current-password" class="w-full mt-1 border border-slate-300 rounded-lg px-3 py-2 text-sm" style="font-size:16px">
+        </div>
+        <div>
+          <label class="text-xs font-semibold">New password</label>
+          <input id="pw-new" type="password" autocomplete="new-password" class="w-full mt-1 border border-slate-300 rounded-lg px-3 py-2 text-sm" style="font-size:16px">
+        </div>
+        <div>
+          <label class="text-xs font-semibold">Confirm new password</label>
+          <input id="pw-confirm" type="password" autocomplete="new-password" class="w-full mt-1 border border-slate-300 rounded-lg px-3 py-2 text-sm" style="font-size:16px">
+        </div>
+      </div>
+      <div class="px-5 py-4 border-t flex justify-end gap-x-3 bg-slate-50 rounded-b-2xl">
+        <button type="button" onclick="closePasswordModal()" class="px-4 py-2 text-sm">Cancel</button>
+        <button type="button" onclick="savePasswordChange()" class="px-6 py-2 bg-blue-800 text-white text-sm font-semibold rounded-xl">Update password</button>
       </div>
     </div>
   </div>
@@ -672,6 +819,13 @@
     let GL_ACCOUNTS = [];
     let CURRENT_REQUESTS = [];
     let editingRequestId = null;
+    const CURRENT_USER = {
+      id: {{ current_user.id or 'null' }},
+      username: {{ (current_user.username or '')|tojson }},
+      display_name: {{ (current_user.display_name or '')|tojson }},
+      role: {{ (current_user.role or 'User')|tojson }}
+    };
+    const IS_ADMIN = CURRENT_USER.role === 'Administrator';
 
     /** Fetch wrapper: redirects to login on 401, credentials always included. */
     async function apiFetch(url, options = {}) {
@@ -690,17 +844,33 @@
       return res;
     }
 
+    function applyRoleUI() {
+      document.querySelectorAll('.admin-only').forEach(el => {
+        if (IS_ADMIN) el.classList.remove('hidden-role');
+        else el.classList.add('hidden-role');
+      });
+    }
+
     function showSection(name) {
+      if (!IS_ADMIN && (name === 'gl' || name === 'users' || name === 'emaillog')) {
+        name = 'status';
+      }
       // hide all
       document.querySelectorAll('.section').forEach(s => s.classList.remove('active'));
       // show target
       const target = document.getElementById('section-' + name);
       if (target) target.classList.add('active');
 
-      // update nav
+      // update desktop nav
       document.querySelectorAll('[id^="nav-"]').forEach(el => el.classList.remove('nav-active'));
       const nav = document.getElementById('nav-' + name);
       if (nav) nav.classList.add('nav-active');
+
+      // update bottom nav
+      document.querySelectorAll('[id^="bnav-"]').forEach(el => el.classList.remove('nav-active'));
+      const bnavKey = name === 'new-request' ? 'new-request' : name;
+      const bnav = document.getElementById('bnav-' + bnavKey);
+      if (bnav) bnav.classList.add('nav-active');
 
       // load data
       if (name === 'status') loadRequests();
@@ -711,7 +881,37 @@
 
     function toggleMobileNav() {
       const nav = document.getElementById('mobile-nav');
-      nav.classList.toggle('hidden');
+      if (nav) nav.classList.toggle('hidden');
+    }
+
+    function openPasswordModal() {
+      document.getElementById('pw-current').value = '';
+      document.getElementById('pw-new').value = '';
+      document.getElementById('pw-confirm').value = '';
+      const m = document.getElementById('password-modal');
+      m.classList.remove('hidden');
+      m.classList.add('flex');
+    }
+    function closePasswordModal() {
+      const m = document.getElementById('password-modal');
+      m.classList.add('hidden');
+      m.classList.remove('flex');
+    }
+    async function savePasswordChange() {
+      const current_password = document.getElementById('pw-current').value;
+      const new_password = document.getElementById('pw-new').value;
+      const confirm = document.getElementById('pw-confirm').value;
+      if (new_password.length < 6) return alert('New password must be at least 6 characters.');
+      if (new_password !== confirm) return alert('New passwords do not match.');
+      const res = await apiFetch('/api/change_password', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ current_password, new_password })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) return alert(data.error || 'Could not change password');
+      closePasswordModal();
+      alert('Password updated.');
     }
 
     // ===== DATA LOADING =====
@@ -734,16 +934,21 @@
       tbody.innerHTML = '';
 
       if (USERS.length === 0) {
-        tbody.innerHTML = `<tr><td colspan="4" class="px-5 py-6 text-center text-slate-400">No users yet. Add some above.</td></tr>`;
+        tbody.innerHTML = `<tr><td colspan="5" class="px-5 py-6 text-center text-slate-400">No users yet. Add some above.</td></tr>`;
         return;
       }
 
       USERS.forEach(u => {
+        const role = u.role || 'User';
+        const roleBadge = role === 'Administrator'
+          ? '<span class="text-xs font-semibold px-2 py-0.5 rounded-full bg-blue-100 text-blue-800">Administrator</span>'
+          : '<span class="text-xs font-medium px-2 py-0.5 rounded-full bg-slate-100 text-slate-600">User</span>';
         const tr = document.createElement('tr');
         tr.innerHTML = `
           <td class="px-5 py-3 font-medium">${u.username}</td>
           <td class="px-4 py-3">${u.first_name} ${u.last_name}</td>
           <td class="px-4 py-3 text-slate-600">${u.email}</td>
+          <td class="px-4 py-3">${roleBadge}</td>
           <td class="px-3 py-3 text-right">
             <button onclick="editUser(${u.id})" class="px-2 py-1 text-blue-700 hover:bg-blue-50 rounded"><i class="fa-solid fa-edit"></i></button>
             <button onclick="deleteUser(${u.id})" class="px-2 py-1 text-red-600 hover:bg-red-50 rounded ml-1"><i class="fa-solid fa-trash"></i></button>
@@ -763,17 +968,20 @@
       tbody.innerHTML = '';
 
       if (GL_ACCOUNTS.length === 0) {
-        tbody.innerHTML = `<tr><td colspan="7" class="px-5 py-8 text-center text-slate-400">No accounts.</td></tr>`;
+        tbody.innerHTML = `<tr><td colspan="8" class="px-5 py-8 text-center text-slate-400">No accounts.</td></tr>`;
         return;
       }
 
       GL_ACCOUNTS.forEach(g => {
         const tr = document.createElement('tr');
         const isExp = g.is_expense ? '<span class="text-emerald-700 text-xs font-medium">Yes</span>' : '<span class="text-slate-400">No</span>';
+        const cat = g.category || '';
+        const aname = g.account_name || g.name || '';
         
         tr.innerHTML = `
           <td class="px-5 py-3 font-semibold mono">${g.account_number}</td>
-          <td class="px-4 py-3">${g.name}</td>
+          <td class="px-4 py-3 text-slate-600 text-sm">${cat || '<span class="text-slate-300">—</span>'}</td>
+          <td class="px-4 py-3">${aname}</td>
           <td class="px-4 py-3">${isExp}</td>
           <td class="px-4 py-3 text-sm">${g.primary_name || '<span class="text-red-400">— none —</span>'}</td>
           <td class="px-4 py-3 text-sm">${g.secondary_name || '<span class="text-slate-300">—</span>'}</td>
@@ -862,11 +1070,11 @@
           <td class="px-4 py-3 text-right whitespace-nowrap">
             <button type="button" onclick="viewRequest(${req.id})" 
                     class="text-xs px-3 py-1.5 rounded-md border border-slate-200 hover:bg-white font-medium">View</button>
-            <button type="button" onclick="deleteRequest(${req.id})" 
+            ${req.can_delete ? `<button type="button" onclick="deleteRequest(${req.id})" 
                     class="text-xs px-2.5 py-1.5 rounded-md border border-red-200 text-red-600 hover:bg-red-50 font-medium ml-1"
                     title="Delete request">
               <i class="fa-solid fa-trash"></i>
-            </button>
+            </button>` : ''}
           </td>
         `;
         tbody.appendChild(tr);
@@ -896,9 +1104,9 @@
 
           <div class="mt-3 flex gap-2">
             <button type="button" onclick="viewRequest(${req.id})" class="tap-target flex-1 text-sm text-center py-2.5 rounded-xl border border-slate-200 font-medium active:bg-slate-50">View / Edit</button>
-            <button type="button" onclick="deleteRequest(${req.id})" class="tap-target px-4 py-2.5 rounded-xl border border-red-200 text-red-600 font-medium active:bg-red-50" title="Delete">
+            ${req.can_delete ? `<button type="button" onclick="deleteRequest(${req.id})" class="tap-target px-4 py-2.5 rounded-xl border border-red-200 text-red-600 font-medium active:bg-red-50" title="Delete">
               <i class="fa-solid fa-trash"></i>
-            </button>
+            </button>` : ''}
           </div>
         `;
         mobile.appendChild(div);
@@ -918,13 +1126,29 @@
       // Users
       await loadUsers(true);
       const userSel = document.getElementById('req-requested-by');
+      const notifySel = document.getElementById('req-notify-user');
       userSel.innerHTML = '<option value="">Select user...</option>';
+      if (notifySel) notifySel.innerHTML = '<option value="">— None —</option>';
       USERS.forEach(u => {
+        const label = `${u.first_name} ${u.last_name} (${u.username})`;
         const opt = document.createElement('option');
         opt.value = u.id;
-        opt.textContent = `${u.first_name} ${u.last_name} (${u.username})`;
+        opt.textContent = label;
         userSel.appendChild(opt);
+        if (notifySel) {
+          const o2 = document.createElement('option');
+          o2.value = u.id;
+          o2.textContent = label;
+          notifySel.appendChild(o2);
+        }
       });
+      // Non-admins request as themselves
+      if (!IS_ADMIN && CURRENT_USER.id) {
+        userSel.value = String(CURRENT_USER.id);
+        userSel.disabled = true;
+      } else {
+        userSel.disabled = false;
+      }
 
       // GL Accounts - setup searchable selector
       await loadGLAccounts(true);
@@ -1072,9 +1296,14 @@
       if (glSearch) glSearch.value = '';
       if (glHidden) glHidden.value = '';
       document.getElementById('req-requested-by').value = '';
+      const notify = document.getElementById('req-notify-user');
+      if (notify) notify.value = '';
+      const att = document.getElementById('req-attachment');
+      if (att) att.value = '';
     }
 
     async function saveRequest() {
+      const notifyVal = document.getElementById('req-notify-user')?.value;
       const payload = {
         vendor: document.getElementById('req-vendor').value.trim(),
         invoice_number: document.getElementById('req-invoice-number').value.trim(),
@@ -1082,7 +1311,8 @@
         amount: parseFloat(document.getElementById('req-amount').value),
         description: document.getElementById('req-description').value.trim(),
         gl_account_id: parseInt(document.getElementById('req-gl').value),
-        requested_by_id: parseInt(document.getElementById('req-requested-by').value)
+        requested_by_id: parseInt(document.getElementById('req-requested-by').value),
+        notify_user_id: notifyVal ? parseInt(notifyVal) : null
       };
 
       if (!payload.vendor || !payload.invoice_date || !payload.amount || !payload.gl_account_id || !payload.requested_by_id) {
@@ -1095,7 +1325,6 @@
       try {
         let res;
         if (reqId) {
-          // edit
           res = await apiFetch('/api/requests/' + reqId, {
             method: 'PUT',
             headers: {'Content-Type': 'application/json'},
@@ -1115,15 +1344,29 @@
         }
 
         const saved = await res.json();
+
+        // Optional attachment after create/update
+        const fileInput = document.getElementById('req-attachment');
+        if (fileInput && fileInput.files && fileInput.files[0]) {
+          const fd = new FormData();
+          fd.append('file', fileInput.files[0]);
+          const up = await apiFetch('/api/requests/' + saved.id + '/attachments', {
+            method: 'POST',
+            body: fd
+          });
+          if (!up.ok) {
+            const err = await up.json().catch(() => ({}));
+            alert('Request saved, but attachment failed: ' + (err.error || up.statusText));
+          }
+        }
         
         resetRequestForm();
         await loadRequests();
         showSection('status');
         
-        // Show confirmation
         setTimeout(() => {
           if (!reqId) {
-            alert('Request #' + saved.id + ' created and routed for approval!\n\nCheck the Email Log to see the simulated email + approval links.');
+            alert('Request #' + saved.id + ' created and routed for approval.');
           } else {
             alert('Request updated.');
           }
@@ -1180,8 +1423,29 @@
           <div class="col-span-2"><span class="text-slate-500">Description:</span><br> ${req.description || '<span class="text-slate-400">—</span>'}</div>
           <div><span class="text-slate-500">GL Account:</span><br> <span class="font-medium">${req.gl ? req.gl.account_number + ' — ' + req.gl.name : ''}</span></div>
           <div><span class="text-slate-500">Requested By:</span><br> ${req.requester ? req.requester.first_name + ' ' + req.requester.last_name + '<br><span class="text-xs">' + req.requester.email + '</span>' : ''}</div>
+          <div class="col-span-2"><span class="text-slate-500">Also notify when approved:</span> ${req.notify_user ? (req.notify_user.first_name + ' ' + req.notify_user.last_name) : '<span class="text-slate-400">—</span>'}</div>
         </div>
       `;
+
+      // Attachments
+      html += `<div class="pt-3 border-t mt-3"><div class="text-xs uppercase tracking-wider text-slate-500 mb-1.5">Attachments</div>`;
+      if (req.attachments && req.attachments.length) {
+        html += `<ul class="space-y-1 text-sm">`;
+        req.attachments.forEach(a => {
+          html += `<li class="flex items-center justify-between gap-2">
+            <a class="text-blue-700 hover:underline truncate" href="/api/attachments/${a.id}" target="_blank" rel="noopener">
+              <i class="fa-solid fa-paperclip mr-1"></i>${a.original_filename}
+            </a>
+            <span class="text-[10px] text-slate-400 shrink-0">${a.size_bytes ? Math.round(a.size_bytes/1024) + ' KB' : ''}</span>
+          </li>`;
+        });
+        html += `</ul>`;
+      } else {
+        html += `<div class="text-xs text-slate-400">No attachments.</div>`;
+      }
+      html += `<div class="mt-2"><input type="file" id="detail-attachment" class="text-xs w-full" />
+        <button type="button" id="detail-attach-btn" class="mt-1 text-xs px-3 py-1.5 rounded-lg border border-slate-200 font-medium">Upload file</button></div>`;
+      html += `</div>`;
 
       // Progress
       html += `<div class="pt-3 border-t mt-3"><div class="text-xs uppercase tracking-wider text-slate-500 mb-1.5">Approval Progress</div>`;
@@ -1226,8 +1490,7 @@
       const actions = document.getElementById('request-modal-actions');
       actions.innerHTML = '';
 
-      if (req.status === 'Pending') {
-        // Edit button
+      if (req.status === 'Pending' && req.can_edit) {
         const editBtn = document.createElement('button');
         editBtn.type = 'button';
         editBtn.className = `tap-target flex-1 md:flex-none px-4 py-2.5 bg-white border border-slate-300 hover:bg-slate-50 rounded-xl text-sm font-medium`;
@@ -1237,36 +1500,38 @@
           editRequestFromData(req);
         };
         actions.appendChild(editBtn);
+      }
 
-        // Manual approve / reject (for testing)
+      if (req.status === 'Pending' && req.can_approve) {
         const approveBtn = document.createElement('button');
         approveBtn.type = 'button';
         approveBtn.className = `tap-target flex-1 md:flex-none px-4 py-2.5 bg-emerald-700 hover:bg-emerald-800 text-white rounded-xl text-sm font-semibold`;
-        approveBtn.innerHTML = `<i class="fa-solid fa-check mr-1.5"></i> Approve (Manual)`;
+        approveBtn.innerHTML = `<i class="fa-solid fa-check mr-1.5"></i> Approve`;
         approveBtn.onclick = () => manualAction(req.id, 'approve');
 
         const rejectBtn = document.createElement('button');
         rejectBtn.type = 'button';
         rejectBtn.className = `tap-target flex-1 md:flex-none px-4 py-2.5 bg-red-600 hover:bg-red-700 text-white rounded-xl text-sm font-semibold`;
-        rejectBtn.innerHTML = `<i class="fa-solid fa-times mr-1.5"></i> Reject (Manual)`;
+        rejectBtn.innerHTML = `<i class="fa-solid fa-times mr-1.5"></i> Reject`;
         rejectBtn.onclick = () => manualAction(req.id, 'reject');
 
         actions.appendChild(approveBtn);
         actions.appendChild(rejectBtn);
-      } else {
+      } else if (req.status !== 'Pending') {
         const note = document.createElement('div');
         note.className = 'text-sm text-slate-500 px-1 py-1 w-full md:w-auto';
         note.textContent = req.status === 'Approved' ? 'This request has been fully approved.' : 'This request was rejected.';
         actions.appendChild(note);
       }
 
-      // Delete available for any status
-      const deleteBtn = document.createElement('button');
-      deleteBtn.type = 'button';
-      deleteBtn.className = 'tap-target flex-1 md:flex-none px-4 py-2.5 text-sm border border-red-200 text-red-600 hover:bg-red-50 rounded-xl font-medium';
-      deleteBtn.innerHTML = `<i class="fa-solid fa-trash mr-1.5"></i> Delete`;
-      deleteBtn.onclick = () => deleteRequest(req.id);
-      actions.appendChild(deleteBtn);
+      if (req.can_delete) {
+        const deleteBtn = document.createElement('button');
+        deleteBtn.type = 'button';
+        deleteBtn.className = 'tap-target flex-1 md:flex-none px-4 py-2.5 text-sm border border-red-200 text-red-600 hover:bg-red-50 rounded-xl font-medium';
+        deleteBtn.innerHTML = `<i class="fa-solid fa-trash mr-1.5"></i> Delete`;
+        deleteBtn.onclick = () => deleteRequest(req.id);
+        actions.appendChild(deleteBtn);
+      }
 
       // Always allow close
       const closeBtn = document.createElement('button');
@@ -1278,6 +1543,22 @@
 
       document.getElementById('request-modal').classList.remove('hidden');
       document.getElementById('request-modal').classList.add('flex');
+
+      const attachBtn = document.getElementById('detail-attach-btn');
+      if (attachBtn) {
+        attachBtn.onclick = async () => {
+          const input = document.getElementById('detail-attachment');
+          if (!input || !input.files || !input.files[0]) return alert('Choose a file first.');
+          const fd = new FormData();
+          fd.append('file', input.files[0]);
+          const up = await apiFetch('/api/requests/' + req.id + '/attachments', { method: 'POST', body: fd });
+          if (!up.ok) {
+            const err = await up.json().catch(() => ({}));
+            return alert(err.error || 'Upload failed');
+          }
+          viewRequest(req.id);
+        };
+      }
     }
 
     function closeRequestModal() {
@@ -1304,6 +1585,8 @@
       populateSelects().then(() => {
         setSelectedGL(req.gl_account_id);
         document.getElementById('req-requested-by').value = req.requested_by_id;
+        const notify = document.getElementById('req-notify-user');
+        if (notify) notify.value = req.notify_user_id || '';
       });
     }
 
@@ -1348,7 +1631,8 @@
 
       if (editGl) {
         document.getElementById('gl-acct-num').value = editGl.account_number || '';
-        document.getElementById('gl-name').value = editGl.name || '';
+        document.getElementById('gl-category').value = editGl.category || '';
+        document.getElementById('gl-name').value = editGl.account_name || editGl.name || '';
         document.getElementById('gl-desc').value = editGl.description || '';
         document.getElementById('gl-is-expense').checked = !!editGl.is_expense;
         p.value = editGl.primary_approver_id || '';
@@ -1356,6 +1640,7 @@
         t.value = editGl.tertiary_approver_id || '';
       } else {
         document.getElementById('gl-acct-num').value = '';
+        document.getElementById('gl-category').value = '';
         document.getElementById('gl-name').value = '';
         document.getElementById('gl-desc').value = '';
         document.getElementById('gl-is-expense').checked = true;
@@ -1373,7 +1658,8 @@
       const id = document.getElementById('gl-id').value;
       const payload = {
         account_number: document.getElementById('gl-acct-num').value.trim(),
-        name: document.getElementById('gl-name').value.trim(),
+        category: document.getElementById('gl-category').value.trim(),
+        account_name: document.getElementById('gl-name').value.trim(),
         description: document.getElementById('gl-desc').value.trim(),
         is_expense: document.getElementById('gl-is-expense').checked,
         primary_approver_id: parseIntOrNull(document.getElementById('gl-primary').value),
@@ -1381,8 +1667,8 @@
         tertiary_approver_id: parseIntOrNull(document.getElementById('gl-tertiary').value)
       };
 
-      if (!payload.account_number || !payload.name) {
-        alert('Account number and name are required.');
+      if (!payload.account_number || !payload.account_name) {
+        alert('Account number and account name are required.');
         return;
       }
 
@@ -1436,12 +1722,14 @@
         document.getElementById('user-first').value = editUser.first_name || '';
         document.getElementById('user-last').value = editUser.last_name || '';
         document.getElementById('user-email').value = editUser.email || '';
+        document.getElementById('user-role').value = editUser.role || 'User';
         document.getElementById('user-password').value = '';  // never prefill password
       } else {
         document.getElementById('user-username').value = '';
         document.getElementById('user-first').value = '';
         document.getElementById('user-last').value = '';
         document.getElementById('user-email').value = '';
+        document.getElementById('user-role').value = 'User';
         document.getElementById('user-password').value = '';
       }
     }
@@ -1460,7 +1748,8 @@
         username: document.getElementById('user-username').value.trim(),
         first_name: document.getElementById('user-first').value.trim(),
         last_name: document.getElementById('user-last').value.trim(),
-        email: document.getElementById('user-email').value.trim()
+        email: document.getElementById('user-email').value.trim(),
+        role: document.getElementById('user-role').value || 'User'
       };
 
       if (pw) {
@@ -1573,13 +1862,17 @@
     // ===== INIT =====
     async function initApp() {
       initTailwind();
+      applyRoleUI();
 
       // Initial loads
       await Promise.all([
-        loadUsers(),
-        loadGLAccounts(),
+        loadUsers(true),
+        loadGLAccounts(true),
         loadStats()
       ]);
+      if (IS_ADMIN) {
+        await Promise.all([loadUsers(), loadGLAccounts()]);
+      }
 
       await loadRequests();
 
