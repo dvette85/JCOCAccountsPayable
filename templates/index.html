@@ -1142,13 +1142,12 @@
           notifySel.appendChild(o2);
         }
       });
-      // Non-admins request as themselves
-      if (!IS_ADMIN && CURRENT_USER.id) {
+      // Default Requested By to the logged-in user
+      if (CURRENT_USER.id) {
         userSel.value = String(CURRENT_USER.id);
-        userSel.disabled = true;
-      } else {
-        userSel.disabled = false;
       }
+      // Non-admins must request as themselves; admins can change the selection
+      userSel.disabled = !IS_ADMIN;
 
       // GL Accounts - setup searchable selector
       await loadGLAccounts(true);
@@ -1295,7 +1294,10 @@
       const glHidden = document.getElementById('req-gl');
       if (glSearch) glSearch.value = '';
       if (glHidden) glHidden.value = '';
-      document.getElementById('req-requested-by').value = '';
+      const reqBy = document.getElementById('req-requested-by');
+      if (reqBy) {
+        reqBy.value = CURRENT_USER.id ? String(CURRENT_USER.id) : '';
+      }
       const notify = document.getElementById('req-notify-user');
       if (notify) notify.value = '';
       const att = document.getElementById('req-attachment');
