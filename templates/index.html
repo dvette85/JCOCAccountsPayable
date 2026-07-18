@@ -2,19 +2,60 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, maximum-scale=1">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="JCC AP">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="theme-color" content="#1e40af">
+  <meta name="format-detection" content="telephone=no">
   <title>AP System • Johnson Church of Christ</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
   <style>
-    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&amp;family=Roboto+Mono:wght@400;500&amp;display=swap');
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Roboto+Mono:wght@400;500&display=swap');
     
     :root {
       --primary: #1e40af;
+      --safe-top: env(safe-area-inset-top, 0px);
+      --safe-bottom: env(safe-area-inset-bottom, 0px);
+      --safe-left: env(safe-area-inset-left, 0px);
+      --safe-right: env(safe-area-inset-right, 0px);
     }
     
-    body { font-family: 'Inter', system_ui, sans-serif; }
+    html {
+      -webkit-text-size-adjust: 100%;
+      height: 100%;
+    }
+
+    body {
+      font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+      -webkit-font-smoothing: antialiased;
+      -webkit-tap-highlight-color: transparent;
+      overscroll-behavior-y: contain;
+      min-height: 100%;
+      padding-left: var(--safe-left);
+      padding-right: var(--safe-right);
+    }
     .mono { font-family: 'Roboto Mono', ui-monospace, monospace; }
+
+    /* iOS Safari: avoid auto-zoom on form focus (inputs must be >= 16px) */
+    input, select, textarea, button {
+      font-size: 16px;
+    }
+    @media (min-width: 768px) {
+      input, select, textarea, button { font-size: inherit; }
+      .text-sm input, .text-sm select, .text-sm textarea, .text-sm button,
+      input.text-sm, select.text-sm, textarea.text-sm, button.text-sm {
+        font-size: 0.875rem;
+      }
+    }
+
+    /* Comfortable touch targets on phones */
+    .tap-target {
+      min-height: 44px;
+      min-width: 44px;
+    }
     
     .nav-active { 
       background-color: #1e40af; 
@@ -25,7 +66,11 @@
     .section { display: none; }
     .section.active { display: block; }
     
-    .table-container { max-height: 520px; overflow-y: auto; }
+    .table-container {
+      max-height: min(520px, 60vh);
+      overflow-y: auto;
+      -webkit-overflow-scrolling: touch;
+    }
     
     .status-pending { @apply bg-amber-100 text-amber-800 px-2.5 py-0.5 rounded-full text-xs font-semibold; }
     .status-approved { @apply bg-emerald-100 text-emerald-800 px-2.5 py-0.5 rounded-full text-xs font-semibold; }
@@ -41,6 +86,9 @@
 
     .modal {
       animation: fadeInScale 0.15s ease-out forwards;
+      max-height: calc(100dvh - env(safe-area-inset-top) - env(safe-area-inset-bottom) - 1rem);
+      overflow-y: auto;
+      -webkit-overflow-scrolling: touch;
     }
     
     @keyframes fadeInScale {
@@ -76,6 +124,7 @@
 
     .filter-input {
       transition: all .1s;
+      min-height: 44px;
     }
     .filter-input:focus {
       box-shadow: 0 0 0 3px rgba(30, 64, 175, 0.1);
@@ -91,24 +140,44 @@
     .mobile-card {
       border: 1px solid #e5e7eb;
     }
+
+    /* Sticky header respects iOS notch / Dynamic Island */
+    .app-header {
+      padding-top: var(--safe-top);
+    }
+
+    .app-footer {
+      padding-bottom: calc(1.25rem + var(--safe-bottom));
+    }
+
+    /* Bottom sheet style on small screens for modals */
+    @media (max-width: 767px) {
+      #request-modal > .modal,
+      #gl-modal > .modal,
+      #user-modal > .modal {
+        border-bottom-left-radius: 0;
+        border-bottom-right-radius: 0;
+        padding-bottom: var(--safe-bottom);
+      }
+    }
   </style>
 </head>
 <body class="bg-slate-50 text-slate-800">
   <!-- Top Header -->
-  <header class="bg-white border-b border-slate-200 sticky top-0 z-50">
+  <header class="app-header bg-white border-b border-slate-200 sticky top-0 z-50">
     <div class="max-w-screen-2xl mx-auto">
-      <div class="px-4 sm:px-6 py-3 flex items-center justify-between">
-        <div class="flex items-center gap-x-3">
-          <div class="w-10 h-10 bg-blue-800 text-white flex items-center justify-center rounded-xl shadow-inner">
+      <div class="px-4 sm:px-6 py-3 flex items-center justify-between gap-2">
+        <div class="flex items-center gap-x-3 min-w-0">
+          <div class="w-10 h-10 shrink-0 bg-blue-800 text-white flex items-center justify-center rounded-xl shadow-inner">
             <i class="fa-solid fa-file-invoice-dollar text-2xl"></i>
           </div>
-          <div>
-            <div class="font-semibold text-xl tracking-tight">Johnson Church of Christ</div>
+          <div class="min-w-0">
+            <div class="font-semibold text-lg sm:text-xl tracking-tight truncate">Johnson Church of Christ</div>
             <div class="text-[10px] text-blue-700 -mt-1 font-medium tracking-[1px]">ACCOUNTS PAYABLE</div>
           </div>
         </div>
 
-        <div class="flex items-center gap-x-2 sm:gap-x-4">
+        <div class="flex items-center gap-x-2 sm:gap-x-3 shrink-0">
           <!-- Stats -->
           <div class="hidden md:flex items-center gap-x-4 text-sm">
             <div class="flex items-center gap-x-1.5 px-3 py-1 bg-slate-100 rounded-full">
@@ -121,9 +190,22 @@
             </div>
           </div>
 
+          <!-- Logged-in user (desktop) -->
+          <div class="hidden sm:flex items-center gap-2 pl-2 border-l border-slate-200">
+            <div class="text-right leading-tight">
+              <div class="text-xs font-semibold text-slate-700 truncate max-w-[140px]" id="header-user-name">{{ current_user.display_name or current_user.username or 'User' }}</div>
+              <div class="text-[10px] text-slate-400">@{{ current_user.username or '' }}</div>
+            </div>
+            <a href="/logout" class="tap-target inline-flex items-center justify-center px-3 py-2 text-xs font-medium text-slate-600 border border-slate-200 rounded-lg hover:bg-slate-50 active:bg-slate-100" title="Sign out">
+              <i class="fa-solid fa-right-from-bracket"></i>
+              <span class="ml-1.5 hidden lg:inline">Sign out</span>
+            </a>
+          </div>
+
           <!-- Mobile nav toggle -->
-          <button onclick="toggleMobileNav()" 
-                  class="md:hidden w-9 h-9 flex items-center justify-center rounded-lg border border-slate-200 hover:bg-slate-100">
+          <button type="button" onclick="toggleMobileNav()" 
+                  class="md:hidden tap-target w-11 h-11 flex items-center justify-center rounded-lg border border-slate-200 hover:bg-slate-100 active:bg-slate-200"
+                  aria-label="Open menu">
             <i class="fa-solid fa-bars"></i>
           </button>
         </div>
@@ -167,21 +249,28 @@
   <!-- Mobile Nav -->
   <div id="mobile-nav" class="hidden md:hidden border-b bg-white px-4 py-2">
     <div class="flex flex-col text-sm">
-      <button onclick="showSection('status');toggleMobileNav()" class="text-left py-2.5 px-3 hover:bg-slate-50 flex items-center gap-2 rounded">
+      <div class="px-3 py-2 mb-1 rounded-lg bg-slate-50 border border-slate-100 sm:hidden">
+        <div class="font-semibold text-slate-800">{{ current_user.display_name or current_user.username or 'User' }}</div>
+        <div class="text-xs text-slate-500">@{{ current_user.username or '' }}</div>
+      </div>
+      <button type="button" onclick="showSection('status');toggleMobileNav()" class="tap-target text-left py-3 px-3 hover:bg-slate-50 active:bg-slate-100 flex items-center gap-2 rounded-lg">
         <i class="fa-solid fa-list-check w-5 text-blue-700"></i> Status &amp; Lookup
       </button>
-      <button onclick="openNewRequest();toggleMobileNav()" class="text-left py-2.5 px-3 hover:bg-slate-50 flex items-center gap-2 rounded">
+      <button type="button" onclick="openNewRequest();toggleMobileNav()" class="tap-target text-left py-3 px-3 hover:bg-slate-50 active:bg-slate-100 flex items-center gap-2 rounded-lg">
         <i class="fa-solid fa-plus w-5 text-blue-700"></i> New Request
       </button>
-      <button onclick="showSection('gl');toggleMobileNav()" class="text-left py-2.5 px-3 hover:bg-slate-50 flex items-center gap-2 rounded">
+      <button type="button" onclick="showSection('gl');toggleMobileNav()" class="tap-target text-left py-3 px-3 hover:bg-slate-50 active:bg-slate-100 flex items-center gap-2 rounded-lg">
         <i class="fa-solid fa-book w-5 text-blue-700"></i> General Ledger
       </button>
-      <button onclick="showSection('users');toggleMobileNav()" class="text-left py-2.5 px-3 hover:bg-slate-50 flex items-center gap-2 rounded">
+      <button type="button" onclick="showSection('users');toggleMobileNav()" class="tap-target text-left py-3 px-3 hover:bg-slate-50 active:bg-slate-100 flex items-center gap-2 rounded-lg">
         <i class="fa-solid fa-users w-5 text-blue-700"></i> Users
       </button>
-      <button onclick="showSection('emaillog');toggleMobileNav()" class="text-left py-2.5 px-3 hover:bg-slate-50 flex items-center gap-2 rounded">
+      <button type="button" onclick="showSection('emaillog');toggleMobileNav()" class="tap-target text-left py-3 px-3 hover:bg-slate-50 active:bg-slate-100 flex items-center gap-2 rounded-lg">
         <i class="fa-solid fa-envelope w-5 text-blue-700"></i> Email Log
       </button>
+      <a href="/logout" class="tap-target text-left py-3 px-3 hover:bg-red-50 active:bg-red-100 flex items-center gap-2 rounded-lg text-red-700 mt-1 border-t border-slate-100">
+        <i class="fa-solid fa-right-from-bracket w-5"></i> Sign out
+      </a>
     </div>
   </div>
 
@@ -264,7 +353,7 @@
                 <th class="px-4 py-3">GL Account</th>
                 <th class="px-4 py-3">Requested By</th>
                 <th class="px-4 py-3">Status / Progress</th>
-                <th class="px-4 py-3 w-28 text-right">Actions</th>
+                <th class="px-4 py-3 w-36 text-right">Actions</th>
               </tr>
             </thead>
             <tbody id="requests-table-body" class="divide-y text-sm"></tbody>
@@ -536,9 +625,9 @@
           <input id="user-email" type="email" class="w-full mt-1 border border-slate-300 rounded-lg px-3 py-2 text-sm" placeholder="name@johnsoncoc.org">
         </div>
         <div>
-          <label class="text-xs font-semibold">Password <span class="text-slate-400 text-[10px]">(leave blank on edit to keep current)</span></label>
-          <input id="user-password" type="password" autocomplete="new-password" class="w-full mt-1 border border-slate-300 rounded-lg px-3 py-2 text-sm" placeholder="••••••••">
-          <div class="text-[10px] text-amber-600 mt-0.5">Default for seeded users: <span class="font-mono">jccpass</span></div>
+          <label class="text-xs font-semibold">Password <span class="text-slate-400 text-[10px]">(required for new users; leave blank on edit to keep current)</span></label>
+          <input id="user-password" type="password" autocomplete="new-password" class="w-full mt-1 border border-slate-300 rounded-lg px-3 py-2 text-sm" placeholder="••••••••" style="font-size:16px">
+          <div class="text-[10px] text-amber-600 mt-0.5">Used to sign in to the AP system. Seeded users default: <span class="font-mono">jccpass</span></div>
         </div>
       </div>
       <div class="px-5 py-4 border-t flex justify-end gap-x-3 bg-slate-50 rounded-b-2xl">
@@ -569,8 +658,8 @@
     </div>
   </div>
 
-  <footer class="text-center py-5 text-xs text-slate-400">
-    Johnson Church of Christ • Accounts Payable • Local Desktop / Mobile Web App
+  <footer class="app-footer text-center py-5 text-xs text-slate-400">
+    Johnson Church of Christ • Accounts Payable • Desktop / Mobile (iOS)
   </footer>
 
   <script>
@@ -583,6 +672,23 @@
     let GL_ACCOUNTS = [];
     let CURRENT_REQUESTS = [];
     let editingRequestId = null;
+
+    /** Fetch wrapper: redirects to login on 401, credentials always included. */
+    async function apiFetch(url, options = {}) {
+      const opts = {
+        credentials: 'same-origin',
+        ...options,
+        headers: {
+          ...(options.headers || {}),
+        },
+      };
+      const res = await fetch(url, opts);
+      if (res.status === 401) {
+        window.location.href = '/login?next=' + encodeURIComponent(window.location.pathname);
+        throw new Error('Authentication required');
+      }
+      return res;
+    }
 
     function showSection(name) {
       // hide all
@@ -611,7 +717,7 @@
     // ===== DATA LOADING =====
     async function loadStats() {
       try {
-        const res = await fetch('/api/stats');
+        const res = await apiFetch('/api/stats');
         const data = await res.json();
         document.getElementById('stat-total').textContent = data.total || 0;
         document.getElementById('stat-pending').textContent = data.by_status?.Pending || 0;
@@ -619,7 +725,7 @@
     }
 
     async function loadUsers(forSelect = false) {
-      const res = await fetch('/api/users');
+      const res = await apiFetch('/api/users');
       USERS = await res.json();
 
       if (forSelect) return USERS;
@@ -648,7 +754,7 @@
     }
 
     async function loadGLAccounts(forSelect = false) {
-      const res = await fetch('/api/gl_accounts');
+      const res = await apiFetch('/api/gl_accounts');
       GL_ACCOUNTS = await res.json();
 
       if (forSelect) return GL_ACCOUNTS;
@@ -696,7 +802,7 @@
       if (status) params.set('status', status);
       if (search) params.set('search', search);
 
-      const res = await fetch('/api/requests?' + params.toString());
+      const res = await apiFetch('/api/requests?' + params.toString());
       CURRENT_REQUESTS = await res.json();
 
       renderRequestsTable();
@@ -753,9 +859,14 @@
             </div>
             ${req.status === 'Pending' ? `<div class="text-[10px] text-slate-500 mt-px">Awaiting step ${req.current_step}</div>` : ''}
           </td>
-          <td class="px-4 py-3 text-right">
-            <button onclick="viewRequest(${req.id})" 
-                    class="text-xs px-3 py-1 rounded-md border border-slate-200 hover:bg-white font-medium">View</button>
+          <td class="px-4 py-3 text-right whitespace-nowrap">
+            <button type="button" onclick="viewRequest(${req.id})" 
+                    class="text-xs px-3 py-1.5 rounded-md border border-slate-200 hover:bg-white font-medium">View</button>
+            <button type="button" onclick="deleteRequest(${req.id})" 
+                    class="text-xs px-2.5 py-1.5 rounded-md border border-red-200 text-red-600 hover:bg-red-50 font-medium ml-1"
+                    title="Delete request">
+              <i class="fa-solid fa-trash"></i>
+            </button>
           </td>
         `;
         tbody.appendChild(tr);
@@ -764,27 +875,30 @@
         const div = document.createElement('div');
         div.className = 'p-4 mobile-card';
         div.innerHTML = `
-          <div class="flex justify-between">
-            <div>
+          <div class="flex justify-between items-start gap-2">
+            <div class="min-w-0">
               <span class="font-semibold">#${req.id}</span>
               <span class="ml-2 ${statusClass}">${req.status}</span>
             </div>
-            <div class="font-semibold tabular-nums">${amount}</div>
+            <div class="font-semibold tabular-nums shrink-0">${amount}</div>
           </div>
-          <div class="mt-1 text-sm font-medium">${req.vendor}</div>
-          <div class="text-xs text-slate-500 mt-0.5">${req.gl_display}</div>
+          <div class="mt-1 text-sm font-medium break-words">${req.vendor}</div>
+          <div class="text-xs text-slate-500 mt-0.5 break-words">${req.gl_display}</div>
           
-          <div class="mt-2 flex items-center justify-between text-xs">
-            <div>Requested by: <span class="font-medium">${req.requester_name}</span></div>
-            <div>${req.invoice_date || ''}</div>
+          <div class="mt-2 flex items-center justify-between text-xs gap-2">
+            <div class="min-w-0 truncate">Requested by: <span class="font-medium">${req.requester_name}</span></div>
+            <div class="shrink-0">${req.invoice_date || ''}</div>
           </div>
 
-          <div class="mt-2 flex items-center gap-1">
+          <div class="mt-2 flex items-center gap-1 flex-wrap">
             ${progress}
           </div>
 
-          <div class="mt-3">
-            <button onclick="viewRequest(${req.id})" class="text-xs w-full text-center py-1.5 rounded-lg border border-slate-200 font-medium">View / Edit</button>
+          <div class="mt-3 flex gap-2">
+            <button type="button" onclick="viewRequest(${req.id})" class="tap-target flex-1 text-sm text-center py-2.5 rounded-xl border border-slate-200 font-medium active:bg-slate-50">View / Edit</button>
+            <button type="button" onclick="deleteRequest(${req.id})" class="tap-target px-4 py-2.5 rounded-xl border border-red-200 text-red-600 font-medium active:bg-red-50" title="Delete">
+              <i class="fa-solid fa-trash"></i>
+            </button>
           </div>
         `;
         mobile.appendChild(div);
@@ -982,13 +1096,13 @@
         let res;
         if (reqId) {
           // edit
-          res = await fetch('/api/requests/' + reqId, {
+          res = await apiFetch('/api/requests/' + reqId, {
             method: 'PUT',
             headers: {'Content-Type': 'application/json'},
             body: JSON.stringify(payload)
           });
         } else {
-          res = await fetch('/api/requests', {
+          res = await apiFetch('/api/requests', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
             body: JSON.stringify(payload)
@@ -1024,9 +1138,28 @@
       showSection('status');
     }
 
-    // ===== VIEW / EDIT REQUEST =====
+    // ===== VIEW / EDIT / DELETE REQUEST =====
+    async function deleteRequest(id) {
+      if (!confirm('Delete request #' + id + '?\n\nThis permanently removes the request, its approval history, and any pending email approval links. This cannot be undone.')) {
+        return;
+      }
+      try {
+        const res = await apiFetch('/api/requests/' + id, { method: 'DELETE' });
+        if (!res.ok && res.status !== 204) {
+          const err = await res.json().catch(() => ({}));
+          throw new Error(err.error || 'Delete failed');
+        }
+        closeRequestModal();
+        await loadRequests();
+      } catch (e) {
+        if (e.message !== 'Authentication required') {
+          alert('Could not delete request: ' + e.message);
+        }
+      }
+    }
+
     async function viewRequest(id) {
-      const res = await fetch('/api/requests/' + id);
+      const res = await apiFetch('/api/requests/' + id);
       if (!res.ok) return alert('Could not load request');
       const req = await res.json();
 
@@ -1096,7 +1229,8 @@
       if (req.status === 'Pending') {
         // Edit button
         const editBtn = document.createElement('button');
-        editBtn.className = `flex-1 md:flex-none px-4 py-2 bg-white border border-slate-300 hover:bg-slate-50 rounded-xl text-sm font-medium`;
+        editBtn.type = 'button';
+        editBtn.className = `tap-target flex-1 md:flex-none px-4 py-2.5 bg-white border border-slate-300 hover:bg-slate-50 rounded-xl text-sm font-medium`;
         editBtn.innerHTML = `<i class="fa-solid fa-edit mr-2"></i> Edit Request`;
         editBtn.onclick = () => {
           closeRequestModal();
@@ -1106,12 +1240,14 @@
 
         // Manual approve / reject (for testing)
         const approveBtn = document.createElement('button');
-        approveBtn.className = `flex-1 md:flex-none px-4 py-2 bg-emerald-700 hover:bg-emerald-800 text-white rounded-xl text-sm font-semibold`;
+        approveBtn.type = 'button';
+        approveBtn.className = `tap-target flex-1 md:flex-none px-4 py-2.5 bg-emerald-700 hover:bg-emerald-800 text-white rounded-xl text-sm font-semibold`;
         approveBtn.innerHTML = `<i class="fa-solid fa-check mr-1.5"></i> Approve (Manual)`;
         approveBtn.onclick = () => manualAction(req.id, 'approve');
 
         const rejectBtn = document.createElement('button');
-        rejectBtn.className = `flex-1 md:flex-none px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-xl text-sm font-semibold`;
+        rejectBtn.type = 'button';
+        rejectBtn.className = `tap-target flex-1 md:flex-none px-4 py-2.5 bg-red-600 hover:bg-red-700 text-white rounded-xl text-sm font-semibold`;
         rejectBtn.innerHTML = `<i class="fa-solid fa-times mr-1.5"></i> Reject (Manual)`;
         rejectBtn.onclick = () => manualAction(req.id, 'reject');
 
@@ -1119,14 +1255,23 @@
         actions.appendChild(rejectBtn);
       } else {
         const note = document.createElement('div');
-        note.className = 'text-sm text-slate-500 px-1 py-1';
+        note.className = 'text-sm text-slate-500 px-1 py-1 w-full md:w-auto';
         note.textContent = req.status === 'Approved' ? 'This request has been fully approved.' : 'This request was rejected.';
         actions.appendChild(note);
       }
 
+      // Delete available for any status
+      const deleteBtn = document.createElement('button');
+      deleteBtn.type = 'button';
+      deleteBtn.className = 'tap-target flex-1 md:flex-none px-4 py-2.5 text-sm border border-red-200 text-red-600 hover:bg-red-50 rounded-xl font-medium';
+      deleteBtn.innerHTML = `<i class="fa-solid fa-trash mr-1.5"></i> Delete`;
+      deleteBtn.onclick = () => deleteRequest(req.id);
+      actions.appendChild(deleteBtn);
+
       // Always allow close
       const closeBtn = document.createElement('button');
-      closeBtn.className = 'flex-1 md:flex-none px-4 py-2 text-sm border border-slate-200 rounded-xl';
+      closeBtn.type = 'button';
+      closeBtn.className = 'tap-target flex-1 md:flex-none px-4 py-2.5 text-sm border border-slate-200 rounded-xl';
       closeBtn.textContent = 'Close';
       closeBtn.onclick = closeRequestModal;
       actions.appendChild(closeBtn);
@@ -1165,7 +1310,7 @@
     async function manualAction(reqId, action) {
       const notes = action === 'reject' ? prompt('Reason for rejection (optional):') : null;
       
-      const res = await fetch(`/api/requests/${reqId}/manual_action`, {
+      const res = await apiFetch(`/api/requests/${reqId}/manual_action`, {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({ action, notes })
@@ -1244,7 +1389,7 @@
       const url = id ? `/api/gl_accounts/${id}` : '/api/gl_accounts';
       const method = id ? 'PUT' : 'POST';
 
-      const res = await fetch(url, {
+      const res = await apiFetch(url, {
         method,
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify(payload)
@@ -1266,14 +1411,14 @@
 
     async function editGL(id) {
       await loadUsers(true);
-      const res = await fetch('/api/gl_accounts/' + id);
+      const res = await apiFetch('/api/gl_accounts/' + id);
       const gl = await res.json();
       openGLModal(gl);
     }
 
     async function deleteGL(id) {
       if (!confirm('Delete this GL account? Existing requests will keep their snapshot.')) return;
-      await fetch('/api/gl_accounts/' + id, { method: 'DELETE' });
+      await apiFetch('/api/gl_accounts/' + id, { method: 'DELETE' });
       await loadGLAccounts();
     }
 
@@ -1323,14 +1468,18 @@
       }
 
       if (!payload.username || !payload.first_name || !payload.last_name || !payload.email) {
-        alert('All fields are required.');
+        alert('Username, name, and email are required.');
+        return;
+      }
+      if (!id && !pw) {
+        alert('Password is required for new users (they need it to sign in).');
         return;
       }
 
       const url = id ? `/api/users/${id}` : '/api/users';
       const method = id ? 'PUT' : 'POST';
 
-      const res = await fetch(url, {
+      const res = await apiFetch(url, {
         method, headers: {'Content-Type': 'application/json'},
         body: JSON.stringify(payload)
       });
@@ -1353,7 +1502,7 @@
 
     async function deleteUser(id) {
       if (!confirm('Delete this user?')) return;
-      await fetch('/api/users/' + id, {method: 'DELETE'});
+      await apiFetch('/api/users/' + id, {method: 'DELETE'});
       await loadUsers();
       await populateSelects();
     }
@@ -1381,7 +1530,7 @@
       const container = document.getElementById('email-log-list');
       container.innerHTML = `<div class="p-4 text-sm text-slate-400">Loading...</div>`;
 
-      const res = await fetch('/api/email_log');
+      const res = await apiFetch('/api/email_log');
       const logs = await res.json();
 
       container.innerHTML = '';

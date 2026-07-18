@@ -35,7 +35,7 @@ Works great on desktop browsers and mobile devices (responsive Tailwind UI).
 
 ```powershell
 python -m venv .venv
-.\ .venv\Scripts\Activate.ps1
+.\.venv\Scripts\Activate.ps1
 ```
 
 3. Install dependencies:

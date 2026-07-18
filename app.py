@@ -9,7 +9,8 @@ import os
 import sqlite3
 import uuid
 from datetime import datetime, date
-from flask import Flask, request, jsonify, render_template, redirect, url_for, send_file, g
+from functools import wraps
+from flask import Flask, request, jsonify, render_template, redirect, url_for, send_file, g, session
 import io
 import csv
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -23,7 +24,9 @@ except ImportError:
     pass
 
 # ---------- CONFIG ----------
-DB_PATH = os.path.join("/data", "ap.db")
+# Prefer persistent disk on Render (/data); fall back to local folder for development
+_default_db = os.path.join("/data", "ap.db") if os.path.isdir("/data") else os.path.join(os.path.dirname(__file__), "ap.db")
+DB_PATH = os.environ.get("DB_PATH", _default_db)
 SECRET_KEY = os.environ.get("SECRET_KEY", "jcc-ap-dev-secret-change-in-prod")
 PORT = int(os.environ.get("PORT", 5000))
 
@@ -45,9 +48,81 @@ SMTP_CONFIG = {
 
 app = Flask(__name__)
 app.config["SECRET_KEY"] = SECRET_KEY
+app.config["SESSION_COOKIE_HTTPONLY"] = True
+app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
+# Secure cookies on HTTPS (set SESSION_COOKIE_SECURE=true, or auto when BASE_URL is https)
+_secure_cookie_env = os.environ.get("SESSION_COOKIE_SECURE", "").lower()
+if _secure_cookie_env in ("1", "true", "yes"):
+    app.config["SESSION_COOKIE_SECURE"] = True
+elif _secure_cookie_env in ("0", "false", "no"):
+    app.config["SESSION_COOKIE_SECURE"] = False
+else:
+    app.config["SESSION_COOKIE_SECURE"] = bool(BASE_URL and str(BASE_URL).startswith("https://"))
+app.config["PERMANENT_SESSION_LIFETIME"] = 60 * 60 * 24 * 14  # 14 days
 
 # Trust proxy headers (important for Render, Heroku, etc. so request.host_url and scheme are correct)
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
+
+# Paths that do not require login (token approval links must stay public)
+PUBLIC_ENDPOINTS = {
+    "login",
+    "logout",
+    "approve_link",
+    "reject_link",
+    "static",
+}
+
+
+def login_required(f):
+    """Decorator for routes that require an authenticated session."""
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        if not session.get("user_id"):
+            if request.path.startswith("/api/"):
+                return jsonify({"error": "Authentication required"}), 401
+            return redirect(url_for("login", next=request.path))
+        return f(*args, **kwargs)
+    return decorated
+
+
+@app.before_request
+def require_login():
+    """Protect all app routes except public endpoints and static assets."""
+    if request.endpoint in PUBLIC_ENDPOINTS:
+        return None
+    if request.endpoint is None:
+        return None
+    # Static files are served without endpoint sometimes; Flask marks them as 'static'
+    if request.path.startswith("/static/"):
+        return None
+    if not session.get("user_id"):
+        if request.path.startswith("/api/"):
+            return jsonify({"error": "Authentication required"}), 401
+        return redirect(url_for("login", next=request.path))
+    return None
+
+
+def current_user():
+    """Return the logged-in user dict (without password_hash) or None."""
+    uid = session.get("user_id")
+    if not uid:
+        return None
+    return get_user(uid)
+
+
+def ensure_user_passwords():
+    """Give existing users without a password the default so they can log in."""
+    db = get_db()
+    cur = db.cursor()
+    cur.execute("SELECT id FROM users WHERE password_hash IS NULL OR password_hash = ''")
+    rows = cur.fetchall()
+    if not rows:
+        return
+    default_pw = generate_password_hash("jccpass")
+    for row in rows:
+        cur.execute("UPDATE users SET password_hash=? WHERE id=?", (default_pw, row["id"]))
+    db.commit()
+    print(f"Set default password (jccpass) on {len(rows)} user(s) missing a password.")
 
 # ---------- DB HELPERS ----------
 def get_db():
@@ -756,11 +831,65 @@ Johnson Church of Christ
 
     return True, f"Approved. Routed to {next_approver['first_name']} {next_approver['last_name']}."
 
-# ---------- ROUTES: PAGES ----------
+# ---------- ROUTES: PAGES & AUTH ----------
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    if session.get("user_id"):
+        return redirect(url_for("index"))
+
+    error = None
+    if request.method == "POST":
+        username = (request.form.get("username") or "").strip()
+        password = request.form.get("password") or ""
+        remember = request.form.get("remember") == "on"
+
+        db = get_db()
+        cur = db.cursor()
+        cur.execute("SELECT * FROM users WHERE username = ? COLLATE NOCASE", (username,))
+        row = cur.fetchone()
+
+        if row and row["password_hash"] and check_password_hash(row["password_hash"], password):
+            session.clear()
+            session["user_id"] = row["id"]
+            session["username"] = row["username"]
+            session["display_name"] = f"{row['first_name']} {row['last_name']}"
+            session.permanent = bool(remember)
+            next_url = request.args.get("next") or request.form.get("next") or url_for("index")
+            # Prevent open redirect
+            if not next_url.startswith("/"):
+                next_url = url_for("index")
+            return redirect(next_url)
+
+        error = "Invalid username or password."
+
+    return render_template("login.html", error=error, next=request.args.get("next", ""))
+
+
+@app.route("/logout", methods=["GET", "POST"])
+def logout():
+    session.clear()
+    return redirect(url_for("login"))
+
+
 @app.route("/")
 def index():
-    # Serve the full SPA
-    return render_template("index.html")
+    return render_template(
+        "index.html",
+        current_user={
+            "id": session.get("user_id"),
+            "username": session.get("username"),
+            "display_name": session.get("display_name"),
+        },
+    )
+
+
+@app.route("/api/me")
+def api_me():
+    u = current_user()
+    if not u:
+        return jsonify({"error": "Not authenticated"}), 401
+    return jsonify(u)
+
 
 @app.route("/approve/<token>")
 def approve_link(token):
@@ -812,8 +941,10 @@ def api_users():
 
     # POST create
     data = request.get_json() or request.form
-    pw = data.get("password")
-    pw_hash = generate_password_hash(pw) if pw else None
+    pw = (data.get("password") or "").strip()
+    if not pw:
+        return jsonify({"error": "Password is required for new users"}), 400
+    pw_hash = generate_password_hash(pw)
     try:
         cur.execute("""
             INSERT INTO users (username, first_name, last_name, email, password_hash)
@@ -1030,7 +1161,7 @@ def api_requests():
         results.append(d)
     return jsonify(results)
 
-@app.route("/api/requests/<int:req_id>", methods=["GET", "PUT"])
+@app.route("/api/requests/<int:req_id>", methods=["GET", "PUT", "DELETE"])
 def api_request_detail(req_id):
     db = get_db()
     cur = db.cursor()
@@ -1044,6 +1175,17 @@ def api_request_detail(req_id):
         cur.execute("SELECT * FROM approval_history WHERE request_id=? ORDER BY acted_at", (req_id,))
         req["history"] = [dict_from_row(h) for h in cur.fetchall()]
         return jsonify(req)
+
+    if request.method == "DELETE":
+        req = get_request(req_id)
+        if not req:
+            return jsonify({"error": "Request not found"}), 404
+        # Cascade related records so FK integrity stays clean
+        cur.execute("DELETE FROM approval_history WHERE request_id=?", (req_id,))
+        cur.execute("DELETE FROM pending_approvals WHERE request_id=?", (req_id,))
+        cur.execute("DELETE FROM requests WHERE id=?", (req_id,))
+        db.commit()
+        return "", 204
 
     # PUT edit (only if pending)
     data = request.get_json()
@@ -1170,11 +1312,21 @@ def api_stats():
     })
 
 # ---------- INIT ----------
+def bootstrap_db():
+    """Create schema, seed demo data, ensure passwords exist (safe to call multiple times)."""
+    init_db()
+    seed_data()
+    ensure_user_passwords()
+
+
+# Run on import so gunicorn / waitress also initialize the database
+with app.app_context():
+    bootstrap_db()
+
+
 if __name__ == "__main__":
-    with app.app_context():
-        init_db()
-        seed_data()
     print(f"\nJohnson Church of Christ Accounts Payable System")
     print(f"Running at http://127.0.0.1:{PORT}")
-    print("Open the URL above in your browser (desktop or mobile).\n")
+    print("Login required — seeded users use password: jccpass")
+    print("Open the URL above in your browser (desktop or mobile / iOS Safari).\n")
     app.run(host="0.0.0.0", port=PORT, debug=True)
