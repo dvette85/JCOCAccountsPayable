@@ -18,6 +18,11 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.middleware.proxy_fix import ProxyFix
 from werkzeug.utils import secure_filename
 
+try:
+    import openpyxl
+except ImportError:
+    openpyxl = None
+
 # Load .env file if present (python-dotenv is in requirements)
 try:
     from dotenv import load_dotenv
@@ -1372,6 +1377,271 @@ def _gl_name_from_payload(data):
     if data.get("category") is not None or data.get("account_name") is not None:
         return compose_gl_name(data.get("category"), data.get("account_name") or data.get("name"))
     return data.get("name") or ""
+
+
+def _normalize_header(h):
+    if h is None:
+        return ""
+    return re.sub(r"[^a-z0-9]+", "", str(h).strip().lower())
+
+
+def _map_gl_header(headers):
+    """Map flexible column headers to field keys."""
+    aliases = {
+        "account_number": {
+            "accountnumber", "account", "accountno", "accountnum", "acct",
+            "acctnumber", "acctno", "acctnum", "account#", "acct#", "number", "no",
+        },
+        "name": {
+            "name", "fullname", "accountname", "accountfullname", "glname", "title",
+        },
+        "category": {"category", "acctcategory", "accountcategory", "class"},
+        "account_name": {"accountnameonly", "subaccount", "detailname"},
+        "description": {"description", "desc", "notes", "memo"},
+        "type": {"type", "accounttype", "accttype"},
+        "is_expense": {"isexpense", "expense", "expenseaccount"},
+    }
+    # Prefer exact "account#" style after normalize strips #
+    normalized = [_normalize_header(h) for h in headers]
+    mapping = {}
+    for field, keys in aliases.items():
+        for i, nh in enumerate(normalized):
+            if nh in keys and field not in mapping:
+                mapping[field] = i
+                break
+    return mapping
+
+
+def _parse_is_expense(val, type_val=None):
+    if val is not None and str(val).strip() != "":
+        s = str(val).strip().lower()
+        if s in ("1", "true", "yes", "y", "expense", "expenses"):
+            return 1
+        if s in ("0", "false", "no", "n"):
+            return 0
+    if type_val is not None:
+        t = str(type_val).strip().lower()
+        if "expense" in t:
+            return 1
+        if t in ("bank", "income", "asset", "liability", "equity", "other current asset",
+                 "other current assets", "fixed asset", "other asset", "credit card",
+                 "other current liability", "long term liability"):
+            return 0
+    return 1  # default expense for AP coding
+
+
+def _rows_from_csv(file_storage):
+    raw = file_storage.read()
+    if isinstance(raw, bytes):
+        # Try utf-8-sig then latin-1
+        try:
+            text = raw.decode("utf-8-sig")
+        except UnicodeDecodeError:
+            text = raw.decode("latin-1")
+    else:
+        text = raw
+    # Sniff delimiter
+    sample = text[:4096]
+    try:
+        dialect = csv.Sniffer().sniff(sample, delimiters=",\t;")
+    except csv.Error:
+        dialect = csv.excel
+    reader = csv.reader(io.StringIO(text), dialect)
+    return [list(row) for row in reader]
+
+
+def _rows_from_xlsx(file_storage):
+    if openpyxl is None:
+        raise RuntimeError("openpyxl is not installed on the server")
+    data = file_storage.read()
+    wb = openpyxl.load_workbook(io.BytesIO(data), read_only=True, data_only=True)
+    ws = wb.active
+    rows = []
+    for row in ws.iter_rows(values_only=True):
+        rows.append([("" if c is None else c) for c in row])
+    wb.close()
+    return rows
+
+
+def _find_header_row(rows, max_scan=25):
+    """Find the first row that looks like column headers for a GL import."""
+    for i, row in enumerate(rows[:max_scan]):
+        mapping = _map_gl_header(row)
+        if "account_number" in mapping and ("name" in mapping or "account_name" in mapping):
+            return i, mapping
+    return None, {}
+
+
+def parse_gl_import_rows(rows):
+    """Parse spreadsheet rows into list of dicts: account_number, name, description, is_expense."""
+    if not rows:
+        return [], "File is empty"
+
+    header_idx, mapping = _find_header_row(rows)
+    if header_idx is None:
+        # Assume first row is data with columns: account_number, name [, description]
+        # or account_number, category, account_name
+        parsed = []
+        for i, row in enumerate(rows):
+            if not row or all(str(c).strip() == "" for c in row):
+                continue
+            acct = str(row[0]).strip() if len(row) > 0 else ""
+            if not acct or not re.search(r"\d", acct):
+                continue
+            if len(row) >= 3 and row[1] and ":" not in str(row[1]) and row[2]:
+                name = compose_gl_name(row[1], row[2])
+                desc = str(row[3]).strip() if len(row) > 3 else ""
+            else:
+                name = str(row[1]).strip() if len(row) > 1 else ""
+                desc = str(row[2]).strip() if len(row) > 2 else ""
+            if not name:
+                continue
+            parsed.append({
+                "account_number": acct,
+                "name": name,
+                "description": desc,
+                "is_expense": 1,
+            })
+        if not parsed:
+            return [], (
+                "Could not detect headers. Include columns like "
+                "'Account #' and 'Full name' (or account_number, name)."
+            )
+        return parsed, None
+
+    parsed = []
+    for row in rows[header_idx + 1:]:
+        if not row or all(str(c).strip() == "" for c in row):
+            continue
+
+        def cell(field):
+            idx = mapping.get(field)
+            if idx is None or idx >= len(row):
+                return None
+            v = row[idx]
+            if v is None:
+                return None
+            return str(v).strip()
+
+        acct = cell("account_number") or ""
+        # Skip title rows / non-numeric account codes without digits
+        if not acct or not re.search(r"\d", acct):
+            continue
+        # Skip repeated header-like rows
+        if _normalize_header(acct) in ("account", "accountnumber", "acct"):
+            continue
+
+        category = cell("category")
+        account_name = cell("account_name")
+        full_name = cell("name") or ""
+        if category or account_name:
+            name = compose_gl_name(category, account_name or full_name)
+        else:
+            name = full_name
+        if not name:
+            continue
+
+        desc = cell("description") or ""
+        is_exp = _parse_is_expense(cell("is_expense"), cell("type"))
+        parsed.append({
+            "account_number": acct,
+            "name": name,
+            "description": desc,
+            "is_expense": is_exp,
+        })
+
+    if not parsed:
+        return [], "No account rows found after the header row"
+    return parsed, None
+
+
+@app.route("/api/gl_accounts/import", methods=["POST"])
+def api_gl_import():
+    """Admin-only: import GL accounts from CSV or Excel (.xlsx).
+
+    Upserts by account_number (updates name/description/is_expense; keeps approvers).
+    Query/form option: mode=insert_only to skip existing account numbers.
+    """
+    denied = require_admin_api()
+    if denied:
+        return denied
+
+    if "file" not in request.files:
+        return jsonify({"error": "No file uploaded (use form field name 'file')"}), 400
+    f = request.files["file"]
+    if not f or not f.filename:
+        return jsonify({"error": "No file selected"}), 400
+
+    filename = secure_filename(f.filename)
+    lower = filename.lower()
+    mode = (request.form.get("mode") or request.args.get("mode") or "upsert").strip().lower()
+    insert_only = mode in ("insert_only", "insert", "add")
+
+    try:
+        if lower.endswith(".csv") or lower.endswith(".txt"):
+            rows = _rows_from_csv(f)
+        elif lower.endswith(".xlsx"):
+            rows = _rows_from_xlsx(f)
+        elif lower.endswith(".xls"):
+            return jsonify({
+                "error": "Legacy .xls is not supported. Save as .xlsx or CSV and try again."
+            }), 400
+        else:
+            return jsonify({"error": "Unsupported file type. Upload .csv or .xlsx"}), 400
+    except Exception as e:
+        return jsonify({"error": f"Could not read file: {e}"}), 400
+
+    accounts, err = parse_gl_import_rows(rows)
+    if err:
+        return jsonify({"error": err}), 400
+
+    db = get_db()
+    cur = db.cursor()
+    created = 0
+    updated = 0
+    skipped = 0
+    errors = []
+
+    for acct in accounts:
+        num = acct["account_number"]
+        cur.execute("SELECT id FROM gl_accounts WHERE account_number = ?", (num,))
+        existing = cur.fetchone()
+        try:
+            if existing:
+                if insert_only:
+                    skipped += 1
+                    continue
+                cur.execute("""
+                    UPDATE gl_accounts
+                    SET name = ?, description = ?, is_expense = ?
+                    WHERE id = ?
+                """, (acct["name"], acct.get("description") or "", acct.get("is_expense", 1), existing["id"]))
+                updated += 1
+            else:
+                cur.execute("""
+                    INSERT INTO gl_accounts (account_number, name, description, is_expense)
+                    VALUES (?, ?, ?, ?)
+                """, (num, acct["name"], acct.get("description") or "", acct.get("is_expense", 1)))
+                created += 1
+        except Exception as e:
+            errors.append(f"{num}: {e}")
+
+    db.commit()
+    return jsonify({
+        "success": True,
+        "created": created,
+        "updated": updated,
+        "skipped": skipped,
+        "errors": errors[:20],
+        "total_rows": len(accounts),
+        "message": (
+            f"Import complete: {created} created, {updated} updated"
+            + (f", {skipped} skipped" if skipped else "")
+            + (f", {len(errors)} errors" if errors else "")
+            + "."
+        ),
+    })
+
 
 @app.route("/api/gl_accounts", methods=["GET", "POST"])
 def api_gl():

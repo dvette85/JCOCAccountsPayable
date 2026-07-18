@@ -558,16 +558,28 @@
 
     <!-- GENERAL LEDGER -->
     <div id="section-gl" class="section">
-      <div class="flex items-center justify-between mb-4">
+      <div class="flex flex-wrap items-end justify-between gap-3 mb-4">
         <div>
           <h1 class="text-2xl font-semibold tracking-tight">General Ledger Accounts</h1>
-          <p class="text-sm text-slate-500">Add, edit, remove accounts. Assign up to 3 sequential approvers per account.</p>
+          <p class="text-sm text-slate-500">Add, edit, remove accounts. Assign up to 3 sequential approvers per account. Import from Excel or CSV.</p>
         </div>
-        <button onclick="openGLModal()" 
-                class="px-4 py-2 bg-blue-800 text-white text-sm font-semibold rounded-xl flex items-center gap-x-2 hover:bg-blue-900">
-          <i class="fa-solid fa-plus"></i>
-          <span>Add Account</span>
-        </button>
+        <div class="flex flex-wrap items-center gap-2">
+          <label class="px-4 py-2 bg-white border border-slate-300 hover:bg-slate-50 text-sm font-semibold rounded-xl flex items-center gap-x-2 cursor-pointer">
+            <i class="fa-solid fa-file-import text-blue-800"></i>
+            <span>Import Excel/CSV</span>
+            <input type="file" id="gl-import-file" class="hidden" accept=".csv,.xlsx,.txt,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv"
+                   onchange="importGLFile(this)">
+          </label>
+          <button type="button" onclick="openGLModal()" 
+                  class="px-4 py-2 bg-blue-800 text-white text-sm font-semibold rounded-xl flex items-center gap-x-2 hover:bg-blue-900">
+            <i class="fa-solid fa-plus"></i>
+            <span>Add Account</span>
+          </button>
+        </div>
+      </div>
+      <div id="gl-import-hint" class="text-xs text-slate-500 mb-3 px-1">
+        Upload <strong>.xlsx</strong> or <strong>.csv</strong>. Expected columns: <span class="font-mono">Account #</span>, <span class="font-mono">Full name</span> (optional: Type, Description).
+        Matching account numbers are updated (approvers kept); new numbers are added.
       </div>
 
       <div class="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-sm">
@@ -1173,15 +1185,16 @@
       userSel.innerHTML = '<option value="">Select user...</option>';
       if (notifySel) notifySel.innerHTML = '<option value="">— None —</option>';
       USERS.forEach(u => {
-        const label = `${u.first_name} ${u.last_name} (${u.username})`;
+        const fullName = `${u.first_name} ${u.last_name}`.trim();
         const opt = document.createElement('option');
         opt.value = u.id;
-        opt.textContent = label;
+        opt.textContent = `${fullName} (${u.username})`;
         userSel.appendChild(opt);
         if (notifySel) {
           const o2 = document.createElement('option');
           o2.value = u.id;
-          o2.textContent = label;
+          // Also notify: show name only (no username)
+          o2.textContent = fullName || u.username;
           notifySel.appendChild(o2);
         }
       });
@@ -1323,15 +1336,25 @@
       document.getElementById('form-hint').classList.remove('hidden');
     }
 
+    function todayISODate() {
+      const d = new Date();
+      const y = d.getFullYear();
+      const m = String(d.getMonth() + 1).padStart(2, '0');
+      const day = String(d.getDate()).padStart(2, '0');
+      return y + '-' + m + '-' + day;
+    }
+
     function resetRequestForm() {
       editingRequestId = null;
       document.getElementById('request-id').value = '';
       document.getElementById('form-title').textContent = 'New Request';
       document.getElementById('save-btn-text').textContent = 'Save & Route for Approval';
 
-      ['req-vendor','req-invoice-number','req-invoice-date','req-amount','req-description'].forEach(id => {
+      ['req-vendor','req-invoice-number','req-amount','req-description'].forEach(id => {
         document.getElementById(id).value = '';
       });
+      // Default invoice date to today on new requests
+      document.getElementById('req-invoice-date').value = todayISODate();
       // Clear searchable GL control
       const glSearch = document.getElementById('req-gl-search');
       const glHidden = document.getElementById('req-gl');
@@ -1752,6 +1775,49 @@
       if (!confirm('Delete this GL account? Existing requests will keep their snapshot.')) return;
       await apiFetch('/api/gl_accounts/' + id, { method: 'DELETE' });
       await loadGLAccounts();
+    }
+
+    async function importGLFile(input) {
+      if (!input || !input.files || !input.files[0]) return;
+      if (!IS_ADMIN) {
+        alert('Only administrators can import GL accounts.');
+        input.value = '';
+        return;
+      }
+      const file = input.files[0];
+      const name = (file.name || '').toLowerCase();
+      if (!name.endsWith('.csv') && !name.endsWith('.xlsx') && !name.endsWith('.txt')) {
+        alert('Please upload a .csv or .xlsx file.');
+        input.value = '';
+        return;
+      }
+      if (!confirm('Import GL accounts from \"' + file.name + '\"?\n\n• New account numbers will be added\n• Existing account numbers will be updated (name/description; approvers kept)')) {
+        input.value = '';
+        return;
+      }
+
+      const fd = new FormData();
+      fd.append('file', file);
+      fd.append('mode', 'upsert');
+
+      try {
+        const res = await apiFetch('/api/gl_accounts/import', { method: 'POST', body: fd });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          alert(data.error || 'Import failed');
+          input.value = '';
+          return;
+        }
+        await loadGLAccounts();
+        let msg = data.message || 'Import complete.';
+        if (data.errors && data.errors.length) {
+          msg += '\n\nSome rows had errors:\n' + data.errors.slice(0, 5).join('\n');
+        }
+        alert(msg);
+      } catch (e) {
+        alert('Import error: ' + e.message);
+      }
+      input.value = '';
     }
 
     // ===== USERS CRUD =====

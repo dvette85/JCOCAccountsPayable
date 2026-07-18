@@ -2,5 +2,6 @@ Flask>=3.0
 Werkzeug>=3.0
 itsdangerous>=2.0
 python-dotenv>=1.0
+openpyxl>=3.1.0     # Excel (.xlsx) import for General Ledger
 gunicorn>=21.0.0  # For production (Linux servers like Render, Railway). Not needed on Windows local.
 waitress>=3.0.0     # Windows-friendly alternative for local/production on Windows
