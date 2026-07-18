@@ -228,15 +228,16 @@
         </div>
 
         <div class="flex items-center gap-x-2 sm:gap-x-3 shrink-0">
-          <!-- Stats -->
-          <div class="hidden md:flex items-center gap-x-4 text-sm">
-            <div class="flex items-center gap-x-1.5 px-3 py-1 bg-slate-100 rounded-full">
-              <i class="fa-solid fa-file-lines text-blue-600"></i>
+          <!-- Stats (always visible; compact on small screens) -->
+          <div class="flex items-center gap-x-1.5 sm:gap-x-3 text-sm">
+            <div class="flex items-center gap-x-1 sm:gap-x-1.5 px-2 sm:px-3 py-1 bg-slate-100 rounded-full">
+              <i class="fa-solid fa-file-lines text-blue-600 text-xs sm:text-sm"></i>
               <span id="stat-total" class="font-semibold">0</span>
-              <span class="text-slate-500 text-xs">requests</span>
+              <span class="text-slate-500 text-[10px] sm:text-xs hidden xs:inline sm:inline">requests</span>
             </div>
-            <div class="flex items-center gap-x-1.5 px-3 py-1 bg-amber-100 text-amber-700 rounded-full text-xs font-medium">
-              <span id="stat-pending">0</span> pending
+            <div class="flex items-center gap-x-1 sm:gap-x-1.5 px-2 sm:px-3 py-1 bg-amber-100 text-amber-700 rounded-full text-[10px] sm:text-xs font-medium">
+              <span id="stat-pending" class="font-semibold">0</span>
+              <span>pending</span>
             </div>
           </div>
 
@@ -915,13 +916,40 @@
     }
 
     // ===== DATA LOADING =====
+    function setHeaderStats(total, pending) {
+      const totalEl = document.getElementById('stat-total');
+      const pendingEl = document.getElementById('stat-pending');
+      if (totalEl) totalEl.textContent = String(total == null ? 0 : total);
+      if (pendingEl) pendingEl.textContent = String(pending == null ? 0 : pending);
+    }
+
+    /** Refresh header totals from /api/stats (scoped by role on the server). */
     async function loadStats() {
       try {
         const res = await apiFetch('/api/stats');
+        if (!res.ok) {
+          // Fall back to counts from the currently loaded request list
+          updateStatsFromLoadedRequests();
+          return;
+        }
         const data = await res.json();
-        document.getElementById('stat-total').textContent = data.total || 0;
-        document.getElementById('stat-pending').textContent = data.by_status?.Pending || 0;
-      } catch(e) {}
+        const by = data.by_status || {};
+        // Support both exact and case-insensitive keys
+        const pending = by.Pending != null ? by.Pending
+          : (by.pending != null ? by.pending
+            : Object.keys(by).reduce((n, k) => (k.toLowerCase() === 'pending' ? by[k] : n), 0));
+        setHeaderStats(data.total || 0, pending || 0);
+      } catch (e) {
+        console.warn('loadStats failed', e);
+        updateStatsFromLoadedRequests();
+      }
+    }
+
+    /** Local fallback / immediate update based on CURRENT_REQUESTS. */
+    function updateStatsFromLoadedRequests() {
+      const list = Array.isArray(CURRENT_REQUESTS) ? CURRENT_REQUESTS : [];
+      const pending = list.filter(r => r && r.status === 'Pending').length;
+      setHeaderStats(list.length, pending);
     }
 
     async function loadUsers(forSelect = false) {
@@ -1011,10 +1039,13 @@
       if (search) params.set('search', search);
 
       const res = await apiFetch('/api/requests?' + params.toString());
-      CURRENT_REQUESTS = await res.json();
+      const data = await res.json();
+      CURRENT_REQUESTS = Array.isArray(data) ? data : [];
 
       renderRequestsTable();
-      loadStats();
+      // Immediate count from loaded rows, then authoritative stats from API
+      updateStatsFromLoadedRequests();
+      await loadStats();
     }
 
     function renderRequestsTable() {
@@ -1604,6 +1635,7 @@
 
       closeRequestModal();
       await loadRequests();
+      await loadStats();
       alert(result.message || 'Done');
     }
 
