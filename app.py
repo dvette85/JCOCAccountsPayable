@@ -1832,43 +1832,52 @@ def api_email_log():
 
 @app.route("/api/stats")
 def api_stats():
-    """Return request counts for the header. Scoped by role for non-admins."""
+    """Return request counts for the header.
+
+    IMPORTANT: Use the same JOINs as GET /api/requests so the badges match
+    what appears in Status & Lookup. A bare COUNT on requests alone can
+    include orphaned rows (missing GL/user) that never show in the table —
+    which is why the UI could show "1 pending" with only an Approved row listed.
+    """
     db = get_db()
     cur = db.cursor()
     me = current_user()
-    if me and not is_admin(me):
-        scope = """(
-            requested_by_id = ? OR notify_user_id = ?
-            OR primary_approver_id = ? OR secondary_approver_id = ? OR tertiary_approver_id = ?
-        )"""
-        params = [me["id"], me["id"], me["id"], me["id"], me["id"]]
-        cur.execute(
-            f"SELECT TRIM(status) as status, COUNT(*) as cnt FROM requests WHERE {scope} GROUP BY TRIM(status)",
-            params,
-        )
-        by_status = {r["status"]: r["cnt"] for r in cur.fetchall()}
-        cur.execute(f"SELECT COUNT(*) as total FROM requests WHERE {scope}", params)
-        total = cur.fetchone()["total"]
-        cur.execute(
-            f"SELECT COUNT(*) as cnt FROM requests WHERE {scope} AND TRIM(status) = 'Pending'",
-            params,
-        )
-        pending = cur.fetchone()["cnt"]
-    else:
-        cur.execute("SELECT TRIM(status) as status, COUNT(*) as cnt FROM requests GROUP BY TRIM(status)")
-        by_status = {r["status"]: r["cnt"] for r in cur.fetchall()}
-        cur.execute("SELECT COUNT(*) as total FROM requests")
-        total = cur.fetchone()["total"]
-        cur.execute("SELECT COUNT(*) as cnt FROM requests WHERE TRIM(status) = 'Pending'")
-        pending = cur.fetchone()["cnt"]
 
-    # Normalize keys and always expose explicit pending/total for the UI
-    pending = int(pending or 0)
-    total = int(total or 0)
+    # Same base join as the Status & Lookup list
+    base_from = """
+        FROM requests r
+        JOIN gl_accounts g ON r.gl_account_id = g.id
+        JOIN users u ON r.requested_by_id = u.id
+    """
+    where = []
+    params = []
+
+    if me and not is_admin(me):
+        where.append("""(
+            r.requested_by_id = ? OR r.notify_user_id = ?
+            OR r.primary_approver_id = ? OR r.secondary_approver_id = ? OR r.tertiary_approver_id = ?
+        )""")
+        params.extend([me["id"], me["id"], me["id"], me["id"], me["id"]])
+
+    where_sql = (" WHERE " + " AND ".join(where)) if where else ""
+
+    cur.execute(
+        f"SELECT TRIM(r.status) as status, COUNT(*) as cnt {base_from}{where_sql} GROUP BY TRIM(r.status)",
+        params,
+    )
     by_norm = {}
-    for k, v in (by_status or {}).items():
-        key = (k or "").strip()
-        by_norm[key] = int(v or 0)
+    for r in cur.fetchall():
+        key = (r["status"] or "").strip()
+        by_norm[key] = int(r["cnt"] or 0)
+
+    cur.execute(f"SELECT COUNT(*) as total {base_from}{where_sql}", params)
+    total = int(cur.fetchone()["total"] or 0)
+
+    # Explicit pending count (status exactly Pending after trim)
+    pending_where = where + ["TRIM(r.status) = 'Pending'"]
+    pending_sql = " WHERE " + " AND ".join(pending_where)
+    cur.execute(f"SELECT COUNT(*) as cnt {base_from}{pending_sql}", params)
+    pending = int(cur.fetchone()["cnt"] or 0)
 
     return jsonify({
         "total": total,

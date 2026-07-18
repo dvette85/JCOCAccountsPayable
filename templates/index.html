@@ -931,45 +931,36 @@
     }
 
     /**
-     * Header badges: total requests + how many are still Pending.
-     * Uses /api/stats (explicit pending count). Falls back to counting
-     * an unfiltered request list so badges always match real statuses.
+     * Header badges must match Status & Lookup data.
+     * Primary source: unfiltered /api/requests (same JOIN/list as the table).
+     * Count Pending by status only — never use total as pending.
      */
     async function loadStats() {
       try {
-        const res = await apiFetch('/api/stats');
+        // Unfiltered list = same rows the table can show (Status = All)
+        const res = await apiFetch('/api/requests');
         if (res.ok) {
-          const data = await res.json();
-          // Prefer explicit pending field; never fall back to total
-          let pending = data.pending;
-          if (pending == null && data.by_status) {
-            const by = data.by_status;
-            pending = by.Pending;
-            if (pending == null) {
-              const key = Object.keys(by).find(k => String(k).trim().toLowerCase() === 'pending');
-              pending = key != null ? by[key] : 0;
-            }
-          }
-          if (pending == null) pending = 0;
-          setHeaderStats(data.total != null ? data.total : 0, pending);
-          return;
-        }
-      } catch (e) {
-        console.warn('loadStats /api/stats failed', e);
-      }
-
-      // Fallback: unfiltered list (not the filtered Status table view)
-      try {
-        const res2 = await apiFetch('/api/requests');
-        if (res2.ok) {
-          const list = await res2.json();
+          const list = await res.json();
           const arr = Array.isArray(list) ? list : [];
           const pending = arr.filter(r => isPendingStatus(r && r.status)).length;
           setHeaderStats(arr.length, pending);
           return;
         }
+      } catch (e) {
+        console.warn('loadStats from /api/requests failed', e);
+      }
+
+      // Secondary: /api/stats (now uses the same JOINs as the list)
+      try {
+        const res2 = await apiFetch('/api/stats');
+        if (res2.ok) {
+          const data = await res2.json();
+          const pending = (data.pending != null) ? data.pending : 0;
+          setHeaderStats(data.total != null ? data.total : 0, pending);
+          return;
+        }
       } catch (e2) {
-        console.warn('loadStats fallback failed', e2);
+        console.warn('loadStats /api/stats failed', e2);
       }
       setHeaderStats(0, 0);
     }
