@@ -919,37 +919,59 @@
     function setHeaderStats(total, pending) {
       const totalEl = document.getElementById('stat-total');
       const pendingEl = document.getElementById('stat-pending');
-      if (totalEl) totalEl.textContent = String(total == null ? 0 : total);
-      if (pendingEl) pendingEl.textContent = String(pending == null ? 0 : pending);
+      // Coerce to numbers so we never show stale/string values
+      const t = Number(total);
+      const p = Number(pending);
+      if (totalEl) totalEl.textContent = String(Number.isFinite(t) ? t : 0);
+      if (pendingEl) pendingEl.textContent = String(Number.isFinite(p) ? p : 0);
     }
 
-    /** Refresh header totals from /api/stats (scoped by role on the server). */
+    function isPendingStatus(status) {
+      return String(status || '').trim().toLowerCase() === 'pending';
+    }
+
+    /**
+     * Header badges: total requests + how many are still Pending.
+     * Uses /api/stats (explicit pending count). Falls back to counting
+     * an unfiltered request list so badges always match real statuses.
+     */
     async function loadStats() {
       try {
         const res = await apiFetch('/api/stats');
-        if (!res.ok) {
-          // Fall back to counts from the currently loaded request list
-          updateStatsFromLoadedRequests();
+        if (res.ok) {
+          const data = await res.json();
+          // Prefer explicit pending field; never fall back to total
+          let pending = data.pending;
+          if (pending == null && data.by_status) {
+            const by = data.by_status;
+            pending = by.Pending;
+            if (pending == null) {
+              const key = Object.keys(by).find(k => String(k).trim().toLowerCase() === 'pending');
+              pending = key != null ? by[key] : 0;
+            }
+          }
+          if (pending == null) pending = 0;
+          setHeaderStats(data.total != null ? data.total : 0, pending);
           return;
         }
-        const data = await res.json();
-        const by = data.by_status || {};
-        // Support both exact and case-insensitive keys
-        const pending = by.Pending != null ? by.Pending
-          : (by.pending != null ? by.pending
-            : Object.keys(by).reduce((n, k) => (k.toLowerCase() === 'pending' ? by[k] : n), 0));
-        setHeaderStats(data.total || 0, pending || 0);
       } catch (e) {
-        console.warn('loadStats failed', e);
-        updateStatsFromLoadedRequests();
+        console.warn('loadStats /api/stats failed', e);
       }
-    }
 
-    /** Local fallback / immediate update based on CURRENT_REQUESTS. */
-    function updateStatsFromLoadedRequests() {
-      const list = Array.isArray(CURRENT_REQUESTS) ? CURRENT_REQUESTS : [];
-      const pending = list.filter(r => r && r.status === 'Pending').length;
-      setHeaderStats(list.length, pending);
+      // Fallback: unfiltered list (not the filtered Status table view)
+      try {
+        const res2 = await apiFetch('/api/requests');
+        if (res2.ok) {
+          const list = await res2.json();
+          const arr = Array.isArray(list) ? list : [];
+          const pending = arr.filter(r => isPendingStatus(r && r.status)).length;
+          setHeaderStats(arr.length, pending);
+          return;
+        }
+      } catch (e2) {
+        console.warn('loadStats fallback failed', e2);
+      }
+      setHeaderStats(0, 0);
     }
 
     async function loadUsers(forSelect = false) {
@@ -1043,8 +1065,7 @@
       CURRENT_REQUESTS = Array.isArray(data) ? data : [];
 
       renderRequestsTable();
-      // Immediate count from loaded rows, then authoritative stats from API
-      updateStatsFromLoadedRequests();
+      // Always refresh header from full (unfiltered) stats — not the filtered table view
       await loadStats();
     }
 

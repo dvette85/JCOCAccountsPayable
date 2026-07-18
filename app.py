@@ -1832,6 +1832,7 @@ def api_email_log():
 
 @app.route("/api/stats")
 def api_stats():
+    """Return request counts for the header. Scoped by role for non-admins."""
     db = get_db()
     cur = db.cursor()
     me = current_user()
@@ -1841,19 +1842,40 @@ def api_stats():
             OR primary_approver_id = ? OR secondary_approver_id = ? OR tertiary_approver_id = ?
         )"""
         params = [me["id"], me["id"], me["id"], me["id"], me["id"]]
-        cur.execute(f"SELECT status, COUNT(*) as cnt FROM requests WHERE {scope} GROUP BY status", params)
+        cur.execute(
+            f"SELECT TRIM(status) as status, COUNT(*) as cnt FROM requests WHERE {scope} GROUP BY TRIM(status)",
+            params,
+        )
         by_status = {r["status"]: r["cnt"] for r in cur.fetchall()}
         cur.execute(f"SELECT COUNT(*) as total FROM requests WHERE {scope}", params)
         total = cur.fetchone()["total"]
+        cur.execute(
+            f"SELECT COUNT(*) as cnt FROM requests WHERE {scope} AND TRIM(status) = 'Pending'",
+            params,
+        )
+        pending = cur.fetchone()["cnt"]
     else:
-        cur.execute("SELECT status, COUNT(*) as cnt FROM requests GROUP BY status")
+        cur.execute("SELECT TRIM(status) as status, COUNT(*) as cnt FROM requests GROUP BY TRIM(status)")
         by_status = {r["status"]: r["cnt"] for r in cur.fetchall()}
         cur.execute("SELECT COUNT(*) as total FROM requests")
         total = cur.fetchone()["total"]
+        cur.execute("SELECT COUNT(*) as cnt FROM requests WHERE TRIM(status) = 'Pending'")
+        pending = cur.fetchone()["cnt"]
+
+    # Normalize keys and always expose explicit pending/total for the UI
+    pending = int(pending or 0)
+    total = int(total or 0)
+    by_norm = {}
+    for k, v in (by_status or {}).items():
+        key = (k or "").strip()
+        by_norm[key] = int(v or 0)
 
     return jsonify({
         "total": total,
-        "by_status": by_status
+        "pending": pending,
+        "approved": int(by_norm.get("Approved") or 0),
+        "rejected": int(by_norm.get("Rejected") or 0),
+        "by_status": by_norm,
     })
 
 # ---------- INIT ----------
