@@ -1,0 +1,425 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AP Request #{{ req.id }} Summary</title>
+  <style>
+    :root {
+      --navy: #1e40af;
+      --ink: #0f172a;
+      --muted: #475569;
+      --line: #cbd5e1;
+      --paper: #ffffff;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; }
+    body {
+      font-family: Calibri, "Segoe UI", Arial, sans-serif;
+      color: var(--ink);
+      background: #e2e8f0;
+      font-size: 11pt;
+      line-height: 1.35;
+    }
+    .toolbar {
+      position: sticky;
+      top: 0;
+      z-index: 20;
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      justify-content: center;
+      padding: 10px 16px;
+      background: #0f172a;
+      color: white;
+    }
+    .toolbar button, .toolbar a {
+      appearance: none;
+      border: 0;
+      background: #1e40af;
+      color: white;
+      font: inherit;
+      font-weight: 600;
+      padding: 8px 14px;
+      border-radius: 8px;
+      cursor: pointer;
+      text-decoration: none;
+    }
+    .toolbar a.secondary, .toolbar button.secondary {
+      background: #334155;
+    }
+    .sheet {
+      width: 8.5in;
+      min-height: 11in;
+      margin: 18px auto;
+      background: var(--paper);
+      padding: 0.5in 0.55in 0.45in;
+      box-shadow: 0 10px 30px rgba(15, 23, 42, 0.12);
+    }
+    header.masthead {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 16px;
+      border-bottom: 3px solid var(--navy);
+      padding-bottom: 10px;
+      margin-bottom: 14px;
+    }
+    .org {
+      font-size: 16pt;
+      font-weight: 700;
+      letter-spacing: 0.01em;
+      color: var(--navy);
+    }
+    .org-sub {
+      font-size: 9pt;
+      letter-spacing: 0.16em;
+      text-transform: uppercase;
+      color: var(--muted);
+      font-weight: 700;
+      margin-top: 2px;
+    }
+    .req-id {
+      text-align: right;
+    }
+    .req-id .num {
+      font-size: 18pt;
+      font-weight: 700;
+      font-variant-numeric: tabular-nums;
+    }
+    .badge {
+      display: inline-block;
+      margin-top: 4px;
+      font-size: 9pt;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      padding: 3px 10px;
+      border-radius: 999px;
+      border: 1px solid #94a3b8;
+    }
+    .badge.pending { background: #fef3c7; color: #92400e; border-color: #f59e0b; }
+    .badge.approved { background: #d1fae5; color: #065f46; border-color: #10b981; }
+    .badge.rejected { background: #fee2e2; color: #991b1b; border-color: #ef4444; }
+
+    h2 {
+      margin: 16px 0 8px;
+      font-size: 9pt;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--navy);
+      border-bottom: 1px solid var(--line);
+      padding-bottom: 4px;
+    }
+    .facts {
+      width: 100%;
+      border-collapse: collapse;
+    }
+    .facts td {
+      vertical-align: top;
+      padding: 4px 10px 4px 0;
+    }
+    .facts .label {
+      width: 22%;
+      color: var(--muted);
+      font-size: 9pt;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    .facts .value {
+      width: 28%;
+      font-weight: 600;
+    }
+    .amount {
+      font-size: 13pt;
+      font-variant-numeric: tabular-nums;
+    }
+    .purpose {
+      margin: 0;
+      white-space: pre-wrap;
+      font-weight: 500;
+    }
+    .approvers {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 10pt;
+    }
+    .approvers th {
+      text-align: left;
+      font-size: 8pt;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--muted);
+      border-bottom: 1px solid var(--line);
+      padding: 5px 6px;
+    }
+    .approvers td {
+      padding: 6px;
+      border-bottom: 1px solid #e2e8f0;
+      vertical-align: top;
+    }
+    .approvers .who { font-weight: 700; }
+    .approvers .email { color: var(--muted); font-size: 9pt; font-weight: 400; }
+    .pill {
+      display: inline-block;
+      font-size: 8.5pt;
+      font-weight: 700;
+      text-transform: uppercase;
+      padding: 2px 7px;
+      border-radius: 999px;
+    }
+    .pill.approved { background: #d1fae5; color: #065f46; }
+    .pill.rejected { background: #fee2e2; color: #991b1b; }
+    .pill.pending { background: #dbeafe; color: #1e3a8a; }
+    .pill.waiting, .pill.other { background: #e2e8f0; color: #334155; }
+    .notes { color: var(--muted); font-size: 9pt; }
+    .callout {
+      margin-top: 8px;
+      padding: 8px 10px;
+      background: #fef2f2;
+      border: 1px solid #fecaca;
+      border-radius: 6px;
+      font-size: 10pt;
+    }
+    .atts { margin: 0; padding-left: 18px; }
+    .atts li { margin: 2px 0; }
+    .empty { color: var(--muted); font-style: italic; }
+    footer.sheet-foot {
+      margin-top: 16px;
+      padding-top: 8px;
+      border-top: 1px solid var(--line);
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      font-size: 8.5pt;
+      color: var(--muted);
+    }
+    .attachment-sheet {
+      width: 8.5in;
+      min-height: 11in;
+      margin: 18px auto;
+      background: var(--paper);
+      padding: 0.45in 0.55in;
+      box-shadow: 0 10px 30px rgba(15, 23, 42, 0.12);
+    }
+    .attachment-sheet h2 { margin-top: 0; }
+    .att-img {
+      max-width: 100%;
+      max-height: 9.1in;
+      object-fit: contain;
+      display: block;
+      margin: 8px auto 0;
+    }
+    .pdf-embed {
+      width: 100%;
+      height: 9.2in;
+      border: 1px solid var(--line);
+    }
+    @page {
+      size: letter;
+      margin: 0.45in;
+    }
+    @media print {
+      body { background: white; }
+      .toolbar { display: none !important; }
+      .sheet, .attachment-sheet {
+        width: auto;
+        min-height: 0;
+        margin: 0;
+        padding: 0;
+        box-shadow: none;
+      }
+      .attachment-sheet {
+        break-before: page;
+        page-break-before: always;
+      }
+      a { color: inherit; text-decoration: none; }
+    }
+  </style>
+</head>
+<body>
+  <div class="toolbar no-print">
+    <button type="button" onclick="window.print()">Print</button>
+    <a class="secondary" href="/" onclick="if (window.opener) { window.close(); return false; }">Back to AP System</a>
+  </div>
+
+  <section class="sheet" aria-label="Request summary">
+    <header class="masthead">
+      <div>
+        <div class="org">Johnson Church of Christ</div>
+        <div class="org-sub">Accounts Payable Request Summary</div>
+      </div>
+      <div class="req-id">
+        <div class="num">Request #{{ req.id }}</div>
+        <span class="badge {{ status|lower }}">{{ status }}</span>
+      </div>
+    </header>
+
+    <h2>Request Details</h2>
+    <table class="facts">
+      <tr>
+        <td class="label">Vendor / Payee</td>
+        <td class="value">{{ vendor }}</td>
+        <td class="label">Amount</td>
+        <td class="value amount">{{ amount_display }}</td>
+      </tr>
+      <tr>
+        <td class="label">Invoice #</td>
+        <td class="value">{{ invoice_number }}</td>
+        <td class="label">Invoice Date</td>
+        <td class="value">{{ invoice_date }}</td>
+      </tr>
+      <tr>
+        <td class="label">Requested By</td>
+        <td class="value">
+          {{ requester_name }}
+          {% if requester_email %}<div class="email" style="font-weight:400;color:#475569;font-size:9pt;">{{ requester_email }}</div>{% endif %}
+        </td>
+        <td class="label">Submitted</td>
+        <td class="value">{{ submitted_at }}</td>
+      </tr>
+      {% if notify_name %}
+      <tr>
+        <td class="label">Also Notify</td>
+        <td class="value" colspan="3">{{ notify_name }}</td>
+      </tr>
+      {% endif %}
+      <tr>
+        <td class="label">GL Account</td>
+        <td class="value" colspan="3">
+          {{ gl_display }}
+          {% if gl_category or gl_account_name %}
+            <div style="font-weight:400;color:#475569;font-size:9pt;">
+              {% if gl_category %}Category: {{ gl_category }}{% endif %}
+              {% if gl_category and gl_account_name %} · {% endif %}
+              {% if gl_account_name %}Account: {{ gl_account_name }}{% endif %}
+            </div>
+          {% endif %}
+        </td>
+      </tr>
+      <tr>
+        <td class="label">Description / Purpose</td>
+        <td class="value" colspan="3"><p class="purpose">{{ description }}</p></td>
+      </tr>
+      {% if approved_at %}
+      <tr>
+        <td class="label">Fully Approved</td>
+        <td class="value" colspan="3">{{ approved_at }}</td>
+      </tr>
+      {% endif %}
+      {% if rejected_at %}
+      <tr>
+        <td class="label">Rejected</td>
+        <td class="value" colspan="3">{{ rejected_at }}</td>
+      </tr>
+      {% endif %}
+    </table>
+
+    {% if reject_reason %}
+    <div class="callout"><strong>Rejection reason:</strong> {{ reject_reason }}</div>
+    {% endif %}
+
+    <h2>Approvers</h2>
+    {% if approvers %}
+    <table class="approvers">
+      <thead>
+        <tr>
+          <th style="width:18%">Role</th>
+          <th style="width:28%">Approver</th>
+          <th style="width:20%">Action</th>
+          <th style="width:20%">Date</th>
+          <th>Notes</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for a in approvers %}
+        <tr>
+          <td>{{ a.role }}</td>
+          <td>
+            <div class="who">{{ a.name }}</div>
+            {% if a.email %}<div class="email">{{ a.email }}</div>{% endif %}
+          </td>
+          <td><span class="pill {{ a.action_key }}">{{ a.action }}</span></td>
+          <td>{{ a.acted_at }}</td>
+          <td class="notes">{{ a.notes or "—" }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p class="empty">No approver chain was assigned to this request’s GL account.</p>
+    {% endif %}
+
+    <h2>Attachments</h2>
+    {% if attachments %}
+    <ul class="atts">
+      {% for a in attachments %}
+      <li>
+        {{ a.original_filename }}
+        {% if a.size_label %} ({{ a.size_label }}){% endif %}
+        {% if a.kind == "image" or a.kind == "pdf" %}
+          — included on the following page{% if printable_attachment_count != 1 %}s{% endif %}
+        {% endif %}
+      </li>
+      {% endfor %}
+    </ul>
+    {% else %}
+    <p class="empty">No files were attached to this request.</p>
+    {% endif %}
+
+    <footer class="sheet-foot">
+      <div>System-generated summary of AP request #{{ req.id }}.</div>
+      <div>
+        Printed {{ printed_at }}{% if printer_name %} by {{ printer_name }}{% endif %}
+      </div>
+    </footer>
+  </section>
+
+  {% for a in image_attachments %}
+  <section class="attachment-sheet">
+    <h2>Attachment · {{ a.original_filename }}</h2>
+    <img class="att-img" src="{{ a.inline_url }}" alt="{{ a.original_filename }}">
+  </section>
+  {% endfor %}
+
+  {% for a in pdf_attachments %}
+  <section class="attachment-sheet">
+    <h2>Attachment · {{ a.original_filename }}</h2>
+    <object class="pdf-embed" data="{{ a.inline_url }}" type="application/pdf">
+      <p>This PDF could not be embedded. Open <a href="{{ a.inline_url }}">{{ a.original_filename }}</a> to print it separately.</p>
+    </object>
+  </section>
+  {% endfor %}
+
+  <script>
+    function triggerPrint() {
+      if (window.__apPrinted) return;
+      window.__apPrinted = true;
+      window.print();
+    }
+    window.addEventListener("load", function () {
+      {% if autoprint %}
+      const imgs = Array.from(document.querySelectorAll("img.att-img"));
+      if (!imgs.length) {
+        setTimeout(triggerPrint, 250);
+        return;
+      }
+      let remaining = imgs.length;
+      const done = function () {
+        remaining -= 1;
+        if (remaining <= 0) setTimeout(triggerPrint, 200);
+      };
+      imgs.forEach(function (img) {
+        if (img.complete) done();
+        else {
+          img.addEventListener("load", done);
+          img.addEventListener("error", done);
+        }
+      });
+      setTimeout(triggerPrint, 4000);
+      {% endif %}
+    });
+  </script>
+</body>
+</html>

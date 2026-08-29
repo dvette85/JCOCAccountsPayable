@@ -123,6 +123,7 @@ The app will auto-create `ap.db` SQLite database on first run and seed:
 - Filters: Date range, Account #, free text search (vendor/desc), status.
 - Export CSV of current view.
 - Click **View** on a request to see details or modify if still Pending.
+- Click **Print** (printer icon, or **Print** in the detail modal) to open a one-sheet summary: requester, vendor, amount, invoice date/number, description, GL account, and each approver with their action and date. Image and PDF attachments print on following pages when the browser can render them.
 - Click the **trash** icon (or **Delete** in the detail modal) to permanently remove a request.
 - From details you can also see full approval chain.
 

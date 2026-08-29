@@ -51,6 +51,12 @@ MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", 15))
 ROLE_ADMIN = "Administrator"
 ROLE_USER = "User"
 
+APPROVER_STEPS = (
+    (1, "primary_approver_id", "Primary"),
+    (2, "secondary_approver_id", "Secondary"),
+    (3, "tertiary_approver_id", "Tertiary"),
+)
+
 # Base URL for generating links in emails (e.g. the public deployment URL)
 # Set this as an environment variable on production (e.g. https://jcocaccountspayable.onrender.com)
 # If not set, falls back to the incoming request's host (works for local dev)
@@ -908,6 +914,216 @@ def get_request(req_id):
     row = cur.fetchone()
     return dict_from_row(row) if row else None
 
+
+def user_full_name(user):
+    if not user:
+        return ""
+    name = f"{user.get('first_name') or ''} {user.get('last_name') or ''}".strip()
+    return name or user.get("username") or ""
+
+
+def format_display_dt(value):
+    """Turn SQLite timestamps into a readable date/time for print and UI."""
+    if not value:
+        return "—"
+    raw = str(value).strip()
+    text = raw.replace("T", " ")
+    dt = None
+    matched_date_only = False
+    for fmt, width in (
+        ("%Y-%m-%d %H:%M:%S.%f", 26),
+        ("%Y-%m-%d %H:%M:%S", 19),
+        ("%Y-%m-%d %H:%M", 16),
+        ("%Y-%m-%d", 10),
+    ):
+        chunk = text[: min(len(text), width)]
+        try:
+            dt = datetime.strptime(chunk, fmt)
+            matched_date_only = fmt == "%Y-%m-%d"
+            break
+        except ValueError:
+            continue
+    if dt is None:
+        return raw
+    date_part = dt.strftime("%b %d, %Y")
+    if matched_date_only or (" " not in raw and "T" not in raw):
+        return date_part
+    hour = dt.strftime("%I").lstrip("0") or "12"
+    return f"{date_part}, {hour}:{dt.strftime('%M %p')}"
+
+
+def format_money(amount):
+    try:
+        return f"${float(amount):,.2f}"
+    except (TypeError, ValueError):
+        return "—"
+
+
+def attachment_kind(att):
+    name = (att.get("original_filename") or "").lower()
+    ct = (att.get("content_type") or "").lower()
+    if name.endswith((".heic", ".heif")) or "heic" in ct or "heif" in ct:
+        return "file"
+    if ct.startswith("image/") or name.endswith((".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp")):
+        return "image"
+    if "pdf" in ct or name.endswith(".pdf"):
+        return "pdf"
+    return "file"
+
+
+def fetch_approval_history(request_id):
+    db = get_db()
+    cur = db.cursor()
+    cur.execute(
+        """
+        SELECT h.*, u.first_name, u.last_name, u.email, u.username
+        FROM approval_history h
+        LEFT JOIN users u ON u.id = h.approver_id
+        WHERE h.request_id=?
+        ORDER BY h.acted_at, h.id
+        """,
+        (request_id,),
+    )
+    rows = []
+    for row in cur.fetchall():
+        d = dict_from_row(row)
+        d["approver_name"] = (
+            f"{d.get('first_name') or ''} {d.get('last_name') or ''}".strip()
+            or d.get("username")
+            or (f"User #{d['approver_id']}" if d.get("approver_id") else "Unknown")
+        )
+        d["acted_at_display"] = format_display_dt(d.get("acted_at"))
+        rows.append(d)
+    return rows
+
+
+def build_print_context(req, printer=None):
+    """Assemble a one-sheet request summary plus printable attachments."""
+    gl = get_gl(req.get("gl_account_id"))
+    requester = get_user(req.get("requested_by_id"))
+    notify_user = get_user(req.get("notify_user_id")) if req.get("notify_user_id") else None
+    history = fetch_approval_history(req["id"])
+    history_by_step = {}
+    for h in history:
+        history_by_step.setdefault(h.get("step"), []).append(h)
+
+    db = get_db()
+    cur = db.cursor()
+    cur.execute(
+        "SELECT step, approver_id, created_at FROM pending_approvals WHERE request_id=?",
+        (req["id"],),
+    )
+    pending_by_step = {row["step"]: dict_from_row(row) for row in cur.fetchall()}
+
+    status = (req.get("status") or "Pending").strip()
+    current_step = req.get("current_step") or 1
+    assigned_steps = [step for step, key, _role in APPROVER_STEPS if req.get(key)]
+    last_assigned = assigned_steps[-1] if assigned_steps else None
+
+    approvers = []
+    for step, key, role in APPROVER_STEPS:
+        uid = req.get(key)
+        if not uid:
+            continue
+        user = get_user(uid)
+        events = history_by_step.get(step) or []
+        latest = events[-1] if events else None
+        action = "Waiting"
+        action_key = "waiting"
+        acted_at = "—"
+        notes = ""
+        actor_name = user_full_name(user) or f"User #{uid}"
+        if latest:
+            act = (latest.get("action") or "").lower()
+            if act == "approved":
+                action, action_key = "Approved", "approved"
+            elif act == "rejected":
+                action, action_key = "Rejected", "rejected"
+            else:
+                action, action_key = (act.title() or "Recorded"), "other"
+            acted_at = latest.get("acted_at_display") or "—"
+            notes = latest.get("notes") or ""
+            actor_name = latest.get("approver_name") or actor_name
+        elif status == "Approved" or (status == "Pending" and current_step > step):
+            action, action_key = "Approved", "approved"
+            if status == "Approved" and last_assigned == step and req.get("approved_at"):
+                acted_at = format_display_dt(req.get("approved_at"))
+        elif status == "Rejected" and current_step == step:
+            action, action_key = "Rejected", "rejected"
+            acted_at = format_display_dt(req.get("rejected_at"))
+            notes = req.get("reject_reason") or ""
+        elif status == "Rejected" and current_step < step:
+            action, action_key = "Not reached", "waiting"
+        elif status == "Pending" and current_step == step:
+            action, action_key = "Awaiting review", "pending"
+            pending = pending_by_step.get(step)
+            if pending and pending.get("created_at"):
+                notes = f"Request sent {format_display_dt(pending['created_at'])}"
+        elif status == "Pending" and current_step < step:
+            action, action_key = "Waiting on prior approval", "waiting"
+
+        approvers.append({
+            "step": step,
+            "role": f"{role} Approver",
+            "name": actor_name,
+            "email": (user or {}).get("email") or "",
+            "action": action,
+            "action_key": action_key,
+            "acted_at": acted_at,
+            "notes": notes,
+        })
+
+    attachments = []
+    for att in list_attachments(req["id"]):
+        kind = attachment_kind(att)
+        att = dict(att)
+        att["kind"] = kind
+        att["inline_url"] = url_for("api_attachment", att_id=att["id"], inline=1)
+        if att.get("size_bytes"):
+            kb = att["size_bytes"] / 1024
+            att["size_label"] = f"{kb:.0f} KB" if kb >= 1 else f"{att['size_bytes']} B"
+        else:
+            att["size_label"] = ""
+        attachments.append(att)
+
+    gl_number = (gl or {}).get("account_number") or ""
+    gl_name = (gl or {}).get("name") or ""
+    gl_category = (gl or {}).get("category") or ""
+    gl_account_name = (gl or {}).get("account_name") or gl_name
+
+    return {
+        "req": req,
+        "status": status,
+        "amount_display": format_money(req.get("amount")),
+        "invoice_number": req.get("invoice_number") or "—",
+        "invoice_date": format_display_dt(req.get("invoice_date")),
+        "submitted_at": format_display_dt(req.get("created_at")),
+        "approved_at": format_display_dt(req.get("approved_at")) if req.get("approved_at") else None,
+        "rejected_at": format_display_dt(req.get("rejected_at")) if req.get("rejected_at") else None,
+        "reject_reason": (req.get("reject_reason") or "").strip(),
+        "description": (req.get("description") or "").strip() or "—",
+        "vendor": req.get("vendor") or "—",
+        "requester_name": user_full_name(requester) or "—",
+        "requester_email": (requester or {}).get("email") or "",
+        "notify_name": user_full_name(notify_user) if notify_user else "",
+        "gl": gl,
+        "gl_number": gl_number,
+        "gl_name": gl_name,
+        "gl_category": gl_category,
+        "gl_account_name": gl_account_name,
+        "gl_display": f"{gl_number} — {gl_name}".strip(" —") if gl else "—",
+        "approvers": approvers,
+        "history": history,
+        "attachments": attachments,
+        "image_attachments": [a for a in attachments if a["kind"] == "image"],
+        "pdf_attachments": [a for a in attachments if a["kind"] == "pdf"],
+        "other_attachments": [a for a in attachments if a["kind"] == "file"],
+        "printable_attachment_count": len([a for a in attachments if a["kind"] in ("image", "pdf")]),
+        "printer_name": user_full_name(printer) or (printer or {}).get("username") or "",
+        "printed_at": format_display_dt(datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
+        "autoprint": request.args.get("preview") != "1",
+    }
+
 # ---------- WORKFLOW ----------
 def get_approver_chain(gl):
     chain = []
@@ -1212,6 +1428,18 @@ def index():
             "email": u.get("email") or "",
         },
     )
+
+
+@app.route("/requests/<int:req_id>/print")
+def print_request(req_id):
+    """One-sheet request summary (plus printable attachments on following pages)."""
+    me = current_user()
+    req = get_request(req_id)
+    if not req:
+        abort(404)
+    if not user_can_view_request(me, req):
+        abort(403)
+    return render_template("print_request.html", **build_print_context(req, printer=me))
 
 
 @app.route("/api/me")
@@ -1854,8 +2082,7 @@ def api_request_detail(req_id):
         req["gl"] = get_gl(req["gl_account_id"])
         req["requester"] = get_user(req["requested_by_id"])
         req["notify_user"] = get_user(req.get("notify_user_id")) if req.get("notify_user_id") else None
-        cur.execute("SELECT * FROM approval_history WHERE request_id=? ORDER BY acted_at", (req_id,))
-        req["history"] = [dict_from_row(h) for h in cur.fetchall()]
+        req["history"] = fetch_approval_history(req_id)
         req["attachments"] = list_attachments(req_id)
         req["can_edit"] = user_can_edit_request(me, req)
         req["can_approve"] = user_can_approve_request(me, req)
@@ -1988,10 +2215,11 @@ def api_attachment(att_id):
     path = os.path.join(UPLOAD_FOLDER, att["stored_filename"])
     if not os.path.isfile(path):
         return jsonify({"error": "File missing on server"}), 404
+    inline = request.args.get("inline", "").lower() in ("1", "true", "yes")
     return send_file(
         path,
         mimetype=att["content_type"] or "application/octet-stream",
-        as_attachment=True,
+        as_attachment=not inline,
         download_name=att["original_filename"],
     )
 

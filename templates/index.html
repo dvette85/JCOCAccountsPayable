@@ -445,7 +445,7 @@
                 <th class="px-4 py-3">GL Account</th>
                 <th class="px-4 py-3">Requested By</th>
                 <th class="px-4 py-3">Status / Progress</th>
-                <th class="px-4 py-3 w-36 text-right">Actions</th>
+                <th class="px-4 py-3 w-48 text-right">Actions</th>
               </tr>
             </thead>
             <tbody id="requests-table-body" class="divide-y text-sm"></tbody>
@@ -1125,6 +1125,11 @@
           <td class="px-4 py-3 text-right whitespace-nowrap">
             <button type="button" onclick="viewRequest(${req.id})" 
                     class="text-xs px-3 py-1.5 rounded-md border border-slate-200 hover:bg-white font-medium">View</button>
+            <button type="button" onclick="printRequest(${req.id})"
+                    class="text-xs px-2.5 py-1.5 rounded-md border border-slate-200 hover:bg-white font-medium ml-1"
+                    title="Print one-sheet summary">
+              <i class="fa-solid fa-print"></i>
+            </button>
             ${req.can_delete ? `<button type="button" onclick="deleteRequest(${req.id})" 
                     class="text-xs px-2.5 py-1.5 rounded-md border border-red-200 text-red-600 hover:bg-red-50 font-medium ml-1"
                     title="Delete request">
@@ -1159,6 +1164,9 @@
 
           <div class="mt-3 flex gap-2">
             <button type="button" onclick="viewRequest(${req.id})" class="tap-target flex-1 text-sm text-center py-2.5 rounded-xl border border-slate-200 font-medium active:bg-slate-50">View / Edit</button>
+            <button type="button" onclick="printRequest(${req.id})" class="tap-target px-4 py-2.5 rounded-xl border border-slate-200 font-medium active:bg-slate-50" title="Print summary">
+              <i class="fa-solid fa-print"></i>
+            </button>
             ${req.can_delete ? `<button type="button" onclick="deleteRequest(${req.id})" class="tap-target px-4 py-2.5 rounded-xl border border-red-200 text-red-600 font-medium active:bg-red-50" title="Delete">
               <i class="fa-solid fa-trash"></i>
             </button>` : ''}
@@ -1547,7 +1555,9 @@
         html += `<div class="pt-3 border-t mt-3"><div class="text-xs uppercase tracking-wider text-slate-500 mb-1">History</div>`;
         req.history.forEach(h => {
           const actColor = h.action === 'approved' ? 'text-emerald-700' : 'text-red-700';
-          html += `<div class="text-xs flex gap-2 py-px"><span class="text-slate-400">${h.acted_at?.substring(0,16)}</span> <span class="${actColor} font-medium">${h.action.toUpperCase()}</span> by user #${h.approver_id} ${h.notes ? '— ' + h.notes : ''}</div>`;
+          const who = h.approver_name || ('user #' + h.approver_id);
+          const when = h.acted_at_display || (h.acted_at || '').substring(0, 16);
+          html += `<div class="text-xs flex gap-2 py-px"><span class="text-slate-400">${when}</span> <span class="${actColor} font-medium">${(h.action || '').toUpperCase()}</span> by ${who} ${h.notes ? '— ' + h.notes : ''}</div>`;
         });
         html += `</div>`;
       }
@@ -1557,6 +1567,13 @@
       // Actions
       const actions = document.getElementById('request-modal-actions');
       actions.innerHTML = '';
+
+      const printBtn = document.createElement('button');
+      printBtn.type = 'button';
+      printBtn.className = 'tap-target flex-1 md:flex-none px-4 py-2.5 bg-white border border-slate-300 hover:bg-slate-50 rounded-xl text-sm font-medium';
+      printBtn.innerHTML = `<i class="fa-solid fa-print mr-1.5"></i> Print`;
+      printBtn.onclick = () => printRequest(req.id);
+      actions.appendChild(printBtn);
 
       if (req.status === 'Pending' && req.can_edit) {
         const editBtn = document.createElement('button');
@@ -1633,6 +1650,14 @@
       const modal = document.getElementById('request-modal');
       modal.classList.remove('flex');
       modal.classList.add('hidden');
+    }
+
+    function printRequest(id) {
+      const url = '/requests/' + id + '/print';
+      const w = window.open(url, '_blank', 'noopener,noreferrer');
+      if (!w) {
+        window.location.href = url;
+      }
     }
 
     function editRequestFromData(req) {
