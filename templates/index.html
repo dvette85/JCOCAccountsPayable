@@ -875,6 +875,30 @@
               <input type="text" id="letter-memo" placeholder="Optional" class="filter-input w-full border border-slate-300 rounded-lg px-3 py-1.5 text-sm">
             </div>
             <div>
+              <label class="block text-xs font-medium text-slate-500 mb-1">Amount</label>
+              <select id="letter-amount-mode" class="filter-input w-full border border-slate-300 rounded-lg px-3 py-1.5 text-sm bg-white" onchange="syncLetterAmountFields()">
+                <option value="any">Any amount</option>
+                <option value="gt">Greater than</option>
+                <option value="lt">Less than</option>
+                <option value="between">Between (range)</option>
+              </select>
+            </div>
+            <div id="letter-amount-min-wrap" class="hidden">
+              <label class="block text-xs font-medium text-slate-500 mb-1" id="letter-amount-min-label">Amount $</label>
+              <input type="number" id="letter-amount-min" step="0.01" min="0" placeholder="0.00" class="filter-input w-full border border-slate-300 rounded-lg px-3 py-1.5 text-sm">
+            </div>
+            <div id="letter-amount-max-wrap" class="hidden">
+              <label class="block text-xs font-medium text-slate-500 mb-1">Through $</label>
+              <input type="number" id="letter-amount-max" step="0.01" min="0" placeholder="0.00" class="filter-input w-full border border-slate-300 rounded-lg px-3 py-1.5 text-sm">
+            </div>
+            <div>
+              <label class="block text-xs font-medium text-slate-500 mb-1">Amount applies to</label>
+              <select id="letter-amount-apply" class="filter-input w-full border border-slate-300 rounded-lg px-3 py-1.5 text-sm bg-white">
+                <option value="total">Contributor total for the period</option>
+                <option value="gift">Each individual gift</option>
+              </select>
+            </div>
+            <div>
               <label class="block text-xs font-medium text-slate-500 mb-1">Letter detail</label>
               <select id="letter-detail" class="filter-input w-full border border-slate-300 rounded-lg px-3 py-1.5 text-sm bg-white">
                 <option value="total">Total contribution for the period</option>
@@ -2372,7 +2396,7 @@
       if (name === 'contributors') loadContributors();
       if (name === 'entries') { loadContributorOptions().then(loadContributionEntries); }
       if (name === 'template') loadLetterTemplate();
-      if (name === 'letters') loadContributorOptions();
+      if (name === 'letters') { loadContributorOptions(); syncLetterAmountFields(); }
     }
 
     function fillContributorSelects() {
@@ -2763,6 +2787,17 @@
       window.open('/contributions/summary/print?' + p.toString(), '_blank', 'noopener');
     }
 
+    function syncLetterAmountFields() {
+      const mode = (document.getElementById('letter-amount-mode') || {}).value || 'any';
+      const minWrap = document.getElementById('letter-amount-min-wrap');
+      const maxWrap = document.getElementById('letter-amount-max-wrap');
+      const minLabel = document.getElementById('letter-amount-min-label');
+      if (minWrap) minWrap.classList.toggle('hidden', mode === 'any');
+      if (maxWrap) maxWrap.classList.toggle('hidden', mode !== 'between');
+      if (minLabel) {
+        minLabel.textContent = mode === 'between' ? 'From $' : (mode === 'lt' ? 'Less than $' : (mode === 'gt' ? 'Greater than $' : 'Amount $'));
+      }
+    }
     function letterParams() {
       const p = new URLSearchParams();
       const df = document.getElementById('letter-from').value;
@@ -2770,11 +2805,21 @@
       const cid = document.getElementById('letter-person').value;
       const memo = document.getElementById('letter-memo').value.trim();
       const detail = document.getElementById('letter-detail').value;
+      const amountMode = (document.getElementById('letter-amount-mode') || {}).value || 'any';
+      const amountMin = (document.getElementById('letter-amount-min') || {}).value;
+      const amountMax = (document.getElementById('letter-amount-max') || {}).value;
+      const amountApply = (document.getElementById('letter-amount-apply') || {}).value || 'total';
       if (df) p.set('date_from', df);
       if (dt) p.set('date_to', dt);
       if (cid) p.set('contributor_id', cid);
       if (memo) p.set('memo', memo);
       p.set('detail', detail || 'total');
+      if (amountMode && amountMode !== 'any') {
+        p.set('amount_mode', amountMode);
+        if (amountMin !== undefined && String(amountMin).trim() !== '') p.set('amount_min', amountMin);
+        if (amountMode === 'between' && amountMax !== undefined && String(amountMax).trim() !== '') p.set('amount_max', amountMax);
+        p.set('amount_apply', amountApply);
+      }
       return p;
     }
     async function previewLetters() {

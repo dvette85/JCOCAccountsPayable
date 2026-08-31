@@ -2756,7 +2756,81 @@ def apply_letter_template(body, context, gift_html=None):
     return escaped.replace(token, gift_html)
 
 
-def letters_for_filters(date_from, date_to, memo, contributor_id, detail_mode):
+def parse_money(value):
+    if value is None:
+        return None
+    text = str(value).strip().replace("$", "").replace(",", "")
+    if text == "":
+        return None
+    try:
+        return float(text)
+    except ValueError:
+        return None
+
+
+def amount_matches(value, mode, min_amt, max_amt):
+    mode = (mode or "any").strip().lower()
+    try:
+        amount = float(value or 0)
+    except (TypeError, ValueError):
+        amount = 0.0
+    if mode in ("", "any"):
+        return True
+    if mode == "gt":
+        return min_amt is not None and amount > min_amt
+    if mode == "lt":
+        return min_amt is not None and amount < min_amt
+    if mode == "between":
+        if min_amt is None and max_amt is None:
+            return True
+        if min_amt is not None and amount < min_amt:
+            return False
+        if max_amt is not None and amount > max_amt:
+            return False
+        return True
+    return True
+
+
+def letter_request_filters():
+    date_from = (request.args.get("date_from") or "").strip()
+    date_to = (request.args.get("date_to") or "").strip()
+    memo = (request.args.get("memo") or "").strip()
+    contributor_id = parse_contributor_id(request.args.get("contributor_id"))
+    detail = (request.args.get("detail") or "total").strip()
+    if detail not in ("total", "transactions"):
+        detail = "total"
+    amount_mode = (request.args.get("amount_mode") or "any").strip().lower()
+    if amount_mode not in ("any", "gt", "lt", "between"):
+        amount_mode = "any"
+    amount_min = parse_money(request.args.get("amount_min") or request.args.get("amount"))
+    amount_max = parse_money(request.args.get("amount_max"))
+    amount_apply = (request.args.get("amount_apply") or "total").strip().lower()
+    if amount_apply not in ("total", "gift"):
+        amount_apply = "total"
+    return {
+        "date_from": date_from,
+        "date_to": date_to,
+        "memo": memo,
+        "contributor_id": contributor_id,
+        "detail": detail,
+        "amount_mode": amount_mode,
+        "amount_min": amount_min,
+        "amount_max": amount_max,
+        "amount_apply": amount_apply,
+    }
+
+
+def letters_for_filters(
+    date_from,
+    date_to,
+    memo,
+    contributor_id,
+    detail_mode,
+    amount_mode="any",
+    amount_min=None,
+    amount_max=None,
+    amount_apply="total",
+):
     where, params = [], []
     if memo:
         where.append("IFNULL(e.memo,'') LIKE ?")
@@ -2766,6 +2840,8 @@ def letters_for_filters(date_from, date_to, memo, contributor_id, detail_mode):
         where.append("e.contributor_id = ?")
         params.append(cid)
     entries = list_contribution_entries_filtered(where, params, date_from, date_to)
+    if amount_apply == "gift":
+        entries = [e for e in entries if amount_matches(e.get("amount"), amount_mode, amount_min, amount_max)]
     grouped = {}
     for e in entries:
         grouped.setdefault(e["contributor_id"], []).append(e)
@@ -2782,6 +2858,8 @@ def letters_for_filters(date_from, date_to, memo, contributor_id, detail_mode):
     for cid, gifts in grouped.items():
         person = get_contributor(cid) or gifts[0]
         gift_text, total = build_gift_detail(gifts, detail_mode)
+        if amount_apply != "gift" and not amount_matches(total, amount_mode, amount_min, amount_max):
+            continue
         gift_html, _ = build_gift_detail_html(gifts, detail_mode)
         ctx = {
             "contributor_name": contributor_full_name(person),
@@ -3295,20 +3373,17 @@ def api_contribution_letters():
     denied = require_admin_api()
     if denied:
         return denied
-    date_from = (request.args.get("date_from") or "").strip()
-    date_to = (request.args.get("date_to") or "").strip()
-    memo = (request.args.get("memo") or "").strip()
-    contributor_id = parse_contributor_id(request.args.get("contributor_id"))
-    detail = (request.args.get("detail") or "total").strip()
-    if detail not in ("total", "transactions"):
-        detail = "total"
-    letters = letters_for_filters(date_from, date_to, memo, contributor_id, detail)
+    f = letter_request_filters()
+    letters = letters_for_filters(
+        f["date_from"], f["date_to"], f["memo"], f["contributor_id"], f["detail"],
+        f["amount_mode"], f["amount_min"], f["amount_max"], f["amount_apply"],
+    )
     return jsonify({
         "count": len(letters),
         "letters": letters,
-        "date_from": date_from,
-        "date_to": date_to,
-        "contributor_id": contributor_id,
+        "date_from": f["date_from"],
+        "date_to": f["date_to"],
+        "contributor_id": f["contributor_id"],
     })
 
 
@@ -3333,14 +3408,12 @@ def print_contribution_summary():
 def print_contribution_letters():
     if not is_admin():
         abort(403)
-    date_from = (request.args.get("date_from") or "").strip()
-    date_to = (request.args.get("date_to") or "").strip()
-    memo = (request.args.get("memo") or "").strip()
-    contributor_id = parse_contributor_id(request.args.get("contributor_id"))
-    detail = (request.args.get("detail") or "total").strip()
-    if detail not in ("total", "transactions"):
-        detail = "total"
-    letters = letters_for_filters(date_from, date_to, memo, contributor_id, detail)
+    f = letter_request_filters()
+    date_from, date_to = f["date_from"], f["date_to"]
+    letters = letters_for_filters(
+        f["date_from"], f["date_to"], f["memo"], f["contributor_id"], f["detail"],
+        f["amount_mode"], f["amount_min"], f["amount_max"], f["amount_apply"],
+    )
     download = request.args.get("download") in ("1", "true", "yes")
     html = render_template(
         "print_contribution_letters.html",
