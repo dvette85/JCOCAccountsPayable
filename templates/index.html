@@ -753,7 +753,7 @@
             </div>
           </div>
         </div>
-        <div class="flex flex-wrap gap-2 mb-3">
+        <div class="flex flex-wrap gap-2 mb-3 items-center">
           <button type="button" onclick="openEntryModal()" class="px-4 py-2 bg-blue-800 text-white text-sm font-semibold rounded-xl">
             <i class="fa-solid fa-plus mr-1"></i> Add entry
           </button>
@@ -764,6 +764,15 @@
           <button type="button" onclick="exportContributionEntries()" class="px-4 py-2 bg-white border border-slate-300 text-sm font-semibold rounded-xl">
             <i class="fa-solid fa-download mr-1"></i> Download
           </button>
+          <label class="inline-flex items-center gap-2 px-3 py-2 bg-white border border-slate-300 text-sm font-semibold rounded-xl cursor-pointer select-none">
+            <input type="checkbox" id="entry-select-all" class="w-4 h-4 accent-blue-700" onchange="toggleSelectAllEntries(this.checked)">
+            Select all
+          </label>
+          <button type="button" id="entry-delete-selected" onclick="deleteSelectedEntries()" disabled
+                  class="px-4 py-2 border border-red-200 text-red-600 text-sm font-semibold rounded-xl disabled:opacity-40 disabled:cursor-not-allowed">
+            <i class="fa-solid fa-trash mr-1"></i> Delete selected
+          </button>
+          <span id="entry-selected-count" class="text-xs text-slate-500"></span>
         </div>
         <p class="text-xs text-slate-500 mb-2">Upload columns: Date, Contributor, Check Number, Method, Memo, Amount. Unknown names are added as new contributors.</p>
         <div class="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-sm">
@@ -771,6 +780,9 @@
             <table class="w-full text-sm">
               <thead>
                 <tr class="bg-slate-50 border-b text-xs text-left font-semibold text-slate-600">
+                  <th class="px-3 py-3 w-10">
+                    <input type="checkbox" id="entry-select-all-head" class="w-4 h-4 accent-blue-700" title="Select all" onchange="toggleSelectAllEntries(this.checked)">
+                  </th>
                   <th class="px-4 py-3">Date</th>
                   <th class="px-4 py-3">Contributor</th>
                   <th class="px-4 py-3">Check #</th>
@@ -2487,10 +2499,14 @@
       CURRENT_ENTRIES = Array.isArray(data) ? data : [];
       const tbody = document.getElementById('entries-table-body');
       if (!CURRENT_ENTRIES.length) {
-        tbody.innerHTML = `<tr><td colspan="7" class="px-5 py-8 text-center text-slate-400">No contribution entries match.</td></tr>`;
+        tbody.innerHTML = `<tr><td colspan="8" class="px-5 py-8 text-center text-slate-400">No contribution entries match.</td></tr>`;
+        syncEntrySelection();
         return;
       }
       tbody.innerHTML = CURRENT_ENTRIES.map(e => `<tr class="hover:bg-slate-50">
+        <td class="px-3 py-3">
+          <input type="checkbox" class="entry-select w-4 h-4 accent-blue-700" value="${e.id}" onchange="syncEntrySelection()">
+        </td>
         <td class="px-4 py-3">${escapeHtml(e.contribution_date_display || formatEntryDate(e.contribution_date) || '')}</td>
         <td class="px-4 py-3 font-medium">${escapeHtml(e.contributor_name || '')}</td>
         <td class="px-4 py-3">${escapeHtml(e.check_number || '—')}</td>
@@ -2502,6 +2518,46 @@
           <button type="button" class="text-xs px-2 py-1 border border-red-200 text-red-600 rounded-md ml-1" onclick="deleteEntry(${e.id})"><i class="fa-solid fa-trash"></i></button>
         </td>
       </tr>`).join('');
+      syncEntrySelection();
+    }
+    function selectedEntryIds() {
+      return Array.from(document.querySelectorAll('.entry-select:checked')).map(el => parseInt(el.value, 10)).filter(n => n);
+    }
+    function syncEntrySelection() {
+      const boxes = Array.from(document.querySelectorAll('.entry-select'));
+      const selected = boxes.filter(el => el.checked);
+      const all = document.getElementById('entry-select-all');
+      const head = document.getElementById('entry-select-all-head');
+      const allChecked = boxes.length > 0 && selected.length === boxes.length;
+      if (all) {
+        all.checked = allChecked;
+        all.indeterminate = selected.length > 0 && !allChecked;
+      }
+      if (head) {
+        head.checked = allChecked;
+        head.indeterminate = selected.length > 0 && !allChecked;
+      }
+      const btn = document.getElementById('entry-delete-selected');
+      if (btn) btn.disabled = selected.length === 0;
+      const count = document.getElementById('entry-selected-count');
+      if (count) count.textContent = selected.length ? (selected.length + ' selected') : '';
+    }
+    function toggleSelectAllEntries(checked) {
+      document.querySelectorAll('.entry-select').forEach(el => { el.checked = !!checked; });
+      syncEntrySelection();
+    }
+    async function deleteSelectedEntries() {
+      const ids = selectedEntryIds();
+      if (!ids.length) return alert('Select one or more contribution entries first.');
+      if (!confirm('Delete ' + ids.length + ' selected contribution ' + (ids.length === 1 ? 'entry' : 'entries') + '? This cannot be undone.')) return;
+      const res = await apiFetch('/api/contribution_entries/bulk_delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) return alert(data.error || 'Delete failed');
+      await loadContributionEntries();
     }
     function clearEntryFilters() {
       document.getElementById('entry-filter-from').value = '';

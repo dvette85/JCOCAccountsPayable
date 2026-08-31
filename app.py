@@ -2983,6 +2983,31 @@ def api_contribution_entries():
     return jsonify(list_contribution_entries_filtered(where, params)[0]), 201
 
 
+@app.route("/api/contribution_entries/bulk_delete", methods=["POST"])
+def api_contribution_entries_bulk_delete():
+    denied = require_admin_api()
+    if denied:
+        return denied
+    data = request.get_json() or {}
+    raw_ids = data.get("ids") or []
+    ids = []
+    for value in raw_ids:
+        try:
+            ids.append(int(value))
+        except (TypeError, ValueError):
+            continue
+    ids = list(dict.fromkeys(i for i in ids if i > 0))
+    if not ids:
+        return jsonify({"error": "No contribution entries selected"}), 400
+    db = get_db()
+    cur = db.cursor()
+    placeholders = ",".join("?" * len(ids))
+    cur.execute(f"DELETE FROM contribution_entries WHERE id IN ({placeholders})", ids)
+    deleted = cur.rowcount if cur.rowcount is not None and cur.rowcount >= 0 else len(ids)
+    db.commit()
+    return jsonify({"deleted": deleted, "message": f"Deleted {deleted} contribution(s)."})
+
+
 @app.route("/api/contribution_entries/<int:eid>", methods=["GET", "PUT", "DELETE"])
 def api_contribution_entry(eid):
     denied = require_admin_api()
