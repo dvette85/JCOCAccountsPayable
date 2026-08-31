@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Contribution Summary Report</title>
+  <style>
+    body { font-family: Calibri, "Segoe UI", Arial, sans-serif; color: #0f172a; margin: 0; background: #e2e8f0; }
+    .toolbar { position: sticky; top: 0; display: flex; gap: 8px; justify-content: center; padding: 10px; background: #0f172a; }
+    .toolbar button, .toolbar a { background: #1e40af; color: #fff; border: 0; padding: 8px 14px; border-radius: 8px; font-weight: 600; text-decoration: none; cursor: pointer; }
+    .sheet { width: 11in; max-width: 100%; margin: 16px auto; background: #fff; padding: 0.45in 0.5in; box-shadow: 0 8px 24px rgba(15,23,42,.12); }
+    h1 { font-size: 18pt; color: #1e3a8a; margin: 0 0 4px; }
+    .sub { color: #64748b; font-size: 10pt; margin-bottom: 14px; }
+    table { width: 100%; border-collapse: collapse; font-size: 10pt; }
+    th, td { border: 1px solid #cbd5e1; padding: 5px 8px; }
+    th { background: #1e3a8a; color: #fff; font-size: 9pt; text-transform: uppercase; letter-spacing: .04em; }
+    td.amt, th.amt { text-align: right; font-variant-numeric: tabular-nums; }
+    tr.avg { background: #fffbeb; font-weight: 700; }
+    tr.total { background: #eff6ff; font-weight: 700; }
+    tr:nth-child(even):not(.avg):not(.total) { background: #f8fafc; }
+    .foot { margin-top: 12px; font-size: 8.5pt; color: #64748b; display: flex; justify-content: space-between; }
+    @page { size: landscape; margin: 0.45in; }
+    @media print {
+      body { background: #fff; }
+      .toolbar { display: none !important; }
+      .sheet { margin: 0; padding: 0; box-shadow: none; width: auto; }
+    }
+  </style>
+</head>
+<body>
+  <div class="toolbar">
+    <button type="button" onclick="window.print()">Print</button>
+    <a href="/">Back to AP System</a>
+  </div>
+  <section class="sheet">
+    <h1>Johnson Church of Christ — Contribution Summary</h1>
+    <div class="sub">
+      {% if data.date_from or data.date_to %}
+        Period:
+        {% if data.date_from %}{{ data.date_from }}{% else %}beginning{% endif %}
+        through
+        {% if data.date_to %}{{ data.date_to }}{% else %}present{% endif %}
+      {% else %}All dates{% endif %}
+      {% if data.memo %} · Memo contains “{{ data.memo }}”{% endif %}
+      · {{ data.entry_count }} contribution{{ 's' if data.entry_count != 1 else '' }}
+      · {{ data.date_count }} date{{ 's' if data.date_count != 1 else '' }}
+    </div>
+    <table>
+      <thead>
+        <tr>
+          <th>Date</th>
+          {% for m in data.methods %}<th class="amt">{{ m }}</th>{% endfor %}
+          <th class="amt">Grand total</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr class="avg">
+          <td>Period average</td>
+          {% for m in data.methods %}<td class="amt">{{ money(data.averages[m]) }}</td>{% endfor %}
+          <td class="amt">{{ money(data.averages['Total']) }}</td>
+        </tr>
+        {% for row in data.rows %}
+        <tr>
+          <td>{{ row.date_display }}</td>
+          {% for m in data.methods %}<td class="amt">{{ money(row[m]) }}</td>{% endfor %}
+          <td class="amt">{{ money(row['Total']) }}</td>
+        </tr>
+        {% endfor %}
+        {% if not data.rows %}
+        <tr><td colspan="{{ 2 + data.methods|length }}" style="text-align:center;color:#64748b;">No contributions match these filters.</td></tr>
+        {% endif %}
+      </tbody>
+      {% if data.rows %}
+      <tfoot>
+        <tr class="total">
+          <td>Grand total</td>
+          {% for m in data.methods %}<td class="amt">{{ money(data.grand_totals[m]) }}</td>{% endfor %}
+          <td class="amt">{{ money(data.grand_totals['Total']) }}</td>
+        </tr>
+      </tfoot>
+      {% endif %}
+    </table>
+    <div class="foot">
+      <span>Period average is the column total divided by the number of dates with contributions.</span>
+      <span>Printed {{ printed_at }}{% if printer_name %} by {{ printer_name }}{% endif %}</span>
+    </div>
+  </section>
+  <script>
+    window.addEventListener("load", function () { setTimeout(function () { window.print(); }, 250); });
+  </script>
+</body>
+</html>

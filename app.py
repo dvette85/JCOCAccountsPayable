@@ -11,6 +11,7 @@ import sqlite3
 import uuid
 from datetime import datetime, date, timedelta
 from functools import wraps
+from html import escape as html_escape
 from flask import Flask, request, jsonify, render_template, redirect, url_for, send_file, g, session, abort
 import io
 import csv
@@ -50,6 +51,27 @@ MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", 15))
 
 ROLE_ADMIN = "Administrator"
 ROLE_USER = "User"
+CONTRIBUTION_METHODS = ("Check", "Cash", "Breeze", "Other")
+DEFAULT_LETTER_TEMPLATE = """Johnson Church of Christ
+Johnson, Arkansas
+
+{{letter_date}}
+
+{{contributor_name}}
+{{address_block}}
+
+Dear {{contributor_name}},
+
+Thank you for your generous contribution to Johnson Church of Christ{{period_phrase}}.
+
+{{gift_detail}}
+
+This letter is your official written acknowledgment for income-tax purposes. No goods or services were provided in exchange for this contribution, other than intangible religious benefits.
+
+With gratitude,
+
+Johnson Church of Christ
+"""
 
 APPROVER_STEPS = (
     (1, "primary_approver_id", "Primary"),
@@ -455,7 +477,53 @@ def init_db():
         )
     """)
 
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS contributors (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            first_name TEXT NOT NULL,
+            last_name TEXT NOT NULL,
+            address_line1 TEXT DEFAULT '',
+            address_line2 TEXT DEFAULT '',
+            city TEXT DEFAULT '',
+            state TEXT DEFAULT '',
+            zip TEXT DEFAULT '',
+            created_at TEXT DEFAULT (datetime('now'))
+        )
+    """)
+
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS contribution_entries (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            contributor_id INTEGER NOT NULL,
+            contribution_date TEXT NOT NULL,
+            amount REAL NOT NULL,
+            method TEXT NOT NULL,
+            check_number TEXT DEFAULT '',
+            memo TEXT DEFAULT '',
+            created_at TEXT DEFAULT (datetime('now')),
+            created_by_id INTEGER,
+            FOREIGN KEY(contributor_id) REFERENCES contributors(id)
+        )
+    """)
+
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS contribution_letter_template (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            body TEXT NOT NULL,
+            updated_at TEXT DEFAULT (datetime('now')),
+            updated_by_id INTEGER
+        )
+    """)
+
+    cur.execute(
+        "CREATE INDEX IF NOT EXISTS idx_contrib_entries_date ON contribution_entries(contribution_date)"
+    )
+    cur.execute(
+        "CREATE INDEX IF NOT EXISTS idx_contrib_entries_contributor ON contribution_entries(contributor_id)"
+    )
+
     db.commit()
+    ensure_letter_template()
 
 def seed_data():
     db = get_db()
@@ -2385,6 +2453,778 @@ def api_stats():
         "by_status": by_norm,
     })
 
+# ---------- CONTRIBUTIONS (administrator only) ----------
+def ensure_letter_template():
+    db = get_db()
+    cur = db.cursor()
+    cur.execute("SELECT id FROM contribution_letter_template WHERE id=1")
+    if not cur.fetchone():
+        cur.execute(
+            "INSERT INTO contribution_letter_template (id, body) VALUES (1, ?)",
+            (DEFAULT_LETTER_TEMPLATE,),
+        )
+        db.commit()
+
+
+def contributor_full_name(row):
+    return f"{(row.get('first_name') or '').strip()} {(row.get('last_name') or '').strip()}".strip()
+
+
+def contributor_address_block(row):
+    lines = []
+    if (row.get("address_line1") or "").strip():
+        lines.append(row["address_line1"].strip())
+    if (row.get("address_line2") or "").strip():
+        lines.append(row["address_line2"].strip())
+    city = (row.get("city") or "").strip()
+    state = (row.get("state") or "").strip()
+    zipc = (row.get("zip") or "").strip()
+    parts = []
+    if city and state:
+        parts.append(f"{city}, {state}")
+    elif city or state:
+        parts.append(city or state)
+    if zipc:
+        parts.append(zipc)
+    city_line = " ".join(parts)
+    if city_line:
+        lines.append(city_line)
+    return "\n".join(lines) if lines else ""
+
+
+def get_contributor(cid):
+    if not cid:
+        return None
+    db = get_db()
+    cur = db.cursor()
+    cur.execute("SELECT * FROM contributors WHERE id=?", (cid,))
+    row = cur.fetchone()
+    return dict_from_row(row) if row else None
+
+
+def serialize_contributor(row):
+    d = dict_from_row(row) if not isinstance(row, dict) else dict(row)
+    d["name"] = contributor_full_name(d)
+    d["address_block"] = contributor_address_block(d)
+    return d
+
+
+def find_contributor_by_name(name):
+    raw = (name or "").strip()
+    if not raw:
+        return None
+    db = get_db()
+    cur = db.cursor()
+    if "," in raw:
+        last, first = [p.strip() for p in raw.split(",", 1)]
+    else:
+        bits = raw.split()
+        if len(bits) >= 2:
+            first, last = bits[0], " ".join(bits[1:])
+        else:
+            first, last = raw, ""
+    cur.execute(
+        """
+        SELECT * FROM contributors
+        WHERE lower(trim(first_name)) = lower(?) AND lower(trim(last_name)) = lower(?)
+        """,
+        (first, last),
+    )
+    row = cur.fetchone()
+    if row:
+        return dict_from_row(row)
+    cur.execute(
+        """
+        SELECT * FROM contributors
+        WHERE lower(trim(first_name) || ' ' || trim(last_name)) = lower(?)
+        """,
+        (raw,),
+    )
+    row = cur.fetchone()
+    return dict_from_row(row) if row else None
+
+
+def get_letter_template_body():
+    ensure_letter_template()
+    db = get_db()
+    cur = db.cursor()
+    cur.execute("SELECT body, updated_at, updated_by_id FROM contribution_letter_template WHERE id=1")
+    row = cur.fetchone()
+    if not row:
+        return DEFAULT_LETTER_TEMPLATE, None, None
+    return row["body"], row["updated_at"], row["updated_by_id"]
+
+
+def format_money_amount(amount):
+    try:
+        return f"${float(amount):,.2f}"
+    except (TypeError, ValueError):
+        return "$0.00"
+
+
+def contribution_entry_filters():
+    where = []
+    params = []
+    date_from = (request.args.get("date_from") or request.form.get("date_from") or "").strip()
+    date_to = (request.args.get("date_to") or request.form.get("date_to") or "").strip()
+    memo = (request.args.get("memo") or request.form.get("memo") or "").strip()
+    contributor_id = request.args.get("contributor_id") or request.form.get("contributor_id")
+    method = (request.args.get("method") or "").strip()
+    if date_from:
+        where.append("e.contribution_date >= ?")
+        params.append(date_from)
+    if date_to:
+        where.append("e.contribution_date <= ?")
+        params.append(date_to)
+    if memo:
+        where.append("e.memo LIKE ?")
+        params.append(f"%{memo}%")
+    if contributor_id and str(contributor_id) not in ("", "0", "all"):
+        where.append("e.contributor_id = ?")
+        params.append(int(contributor_id))
+    if method and method in CONTRIBUTION_METHODS:
+        where.append("e.method = ?")
+        params.append(method)
+    return where, params
+
+
+def list_contribution_entries_filtered(where, params):
+    db = get_db()
+    cur = db.cursor()
+    sql = """
+        SELECT e.*, c.first_name, c.last_name, c.address_line1, c.address_line2,
+               c.city, c.state, c.zip
+        FROM contribution_entries e
+        JOIN contributors c ON c.id = e.contributor_id
+    """
+    if where:
+        sql += " WHERE " + " AND ".join(where)
+    sql += " ORDER BY e.contribution_date, c.last_name, c.first_name, e.id"
+    cur.execute(sql, params)
+    rows = []
+    for r in cur.fetchall():
+        d = dict_from_row(r)
+        d["contributor_name"] = contributor_full_name(d)
+        d["amount"] = float(d.get("amount") or 0)
+        rows.append(d)
+    return rows
+
+
+def build_gift_detail(entries, detail_mode):
+    total = sum(e["amount"] for e in entries)
+    if detail_mode == "transactions":
+        lines = ["Date            Method     Check #      Memo                         Amount"]
+        lines.append("-" * 76)
+        for e in entries:
+            memo = (e.get("memo") or "")[:24]
+            chk = (e.get("check_number") or "")[:10]
+            lines.append(
+                f"{e.get('contribution_date') or '':<16}{(e.get('method') or ''):<11}{chk:<13}{memo:<28}{format_money_amount(e['amount']):>8}"
+            )
+        lines.append("-" * 76)
+        lines.append(f"{'Total':<68}{format_money_amount(total):>8}")
+        return "\n".join(lines), total
+    return f"The total of your contributions for this period is {format_money_amount(total)}.", total
+
+
+def build_gift_detail_html(entries, detail_mode):
+    total = sum(e["amount"] for e in entries)
+    if detail_mode != "transactions":
+        return (
+            f"<p>The total of your contributions for this period is "
+            f"<strong>{html_escape(format_money_amount(total))}</strong>.</p>"
+        ), total
+    rows = []
+    for e in entries:
+        rows.append(
+            "<tr>"
+            f"<td>{html_escape(e.get('contribution_date') or '')}</td>"
+            f"<td>{html_escape(e.get('method') or '')}</td>"
+            f"<td>{html_escape(e.get('check_number') or '—')}</td>"
+            f"<td>{html_escape(e.get('memo') or '—')}</td>"
+            f"<td class='amt'>{html_escape(format_money_amount(e['amount']))}</td>"
+            "</tr>"
+        )
+    table = (
+        "<table class='gifts'><thead><tr>"
+        "<th>Date</th><th>Method</th><th>Check #</th><th>Memo</th><th>Amount</th>"
+        "</tr></thead><tbody>"
+        + "".join(rows)
+        + "</tbody><tfoot><tr><td colspan='4'>Total</td>"
+        f"<td class='amt'>{html_escape(format_money_amount(total))}</td></tr></tfoot></table>"
+    )
+    return table, total
+
+
+def apply_letter_template(body, context, gift_html=None):
+    token = "___GIFT_DETAIL_HTML___"
+    text = body or ""
+    replacements = {}
+    for key, val in context.items():
+        if key == "gift_detail":
+            continue
+        replacements["{{" + key + "}}"] = str(val or "")
+    if gift_html is not None:
+        text = text.replace("{{gift_detail}}", token)
+    else:
+        replacements["{{gift_detail}}"] = context.get("gift_detail") or ""
+    for needle, val in replacements.items():
+        text = text.replace(needle, val)
+    if gift_html is None:
+        return text
+    escaped = html_escape(text).replace("\n", "<br>\n")
+    return escaped.replace(token, gift_html)
+
+
+def letters_for_filters(date_from, date_to, memo, contributor_id, detail_mode):
+    where, params = [], []
+    if date_from:
+        where.append("e.contribution_date >= ?")
+        params.append(date_from)
+    if date_to:
+        where.append("e.contribution_date <= ?")
+        params.append(date_to)
+    if memo:
+        where.append("e.memo LIKE ?")
+        params.append(f"%{memo}%")
+    if contributor_id:
+        where.append("e.contributor_id = ?")
+        params.append(int(contributor_id))
+    entries = list_contribution_entries_filtered(where, params)
+    grouped = {}
+    for e in entries:
+        grouped.setdefault(e["contributor_id"], []).append(e)
+    body, _, _ = get_letter_template_body()
+    letter_date = format_display_dt(datetime.now().strftime("%Y-%m-%d"))
+    period_phrase = ""
+    if date_from and date_to:
+        period_phrase = f" from {format_display_dt(date_from)} through {format_display_dt(date_to)}"
+    elif date_from:
+        period_phrase = f" beginning {format_display_dt(date_from)}"
+    elif date_to:
+        period_phrase = f" through {format_display_dt(date_to)}"
+    letters = []
+    for cid, gifts in grouped.items():
+        person = get_contributor(cid) or gifts[0]
+        gift_text, total = build_gift_detail(gifts, detail_mode)
+        gift_html, _ = build_gift_detail_html(gifts, detail_mode)
+        ctx = {
+            "contributor_name": contributor_full_name(person),
+            "address_block": contributor_address_block(person),
+            "letter_date": letter_date,
+            "date_from": format_display_dt(date_from) if date_from else "",
+            "date_to": format_display_dt(date_to) if date_to else "",
+            "period_phrase": period_phrase,
+            "total_amount": format_money_amount(total),
+            "church_name": "Johnson Church of Christ",
+            "gift_detail": gift_text,
+        }
+        letters.append({
+            "contributor_id": cid,
+            "contributor_name": ctx["contributor_name"],
+            "total": total,
+            "entry_count": len(gifts),
+            "body_text": apply_letter_template(body, ctx),
+            "body_html": apply_letter_template(body, ctx, gift_html=gift_html),
+        })
+    letters.sort(key=lambda x: x["contributor_name"].lower())
+    return letters
+
+
+def summary_report_data(date_from, date_to, memo):
+    where, params = [], []
+    if date_from:
+        where.append("e.contribution_date >= ?")
+        params.append(date_from)
+    if date_to:
+        where.append("e.contribution_date <= ?")
+        params.append(date_to)
+    if memo:
+        where.append("e.memo LIKE ?")
+        params.append(f"%{memo}%")
+    entries = list_contribution_entries_filtered(where, params)
+    by_date = {}
+    for e in entries:
+        d = e.get("contribution_date") or ""
+        bucket = by_date.setdefault(d, {m: 0.0 for m in CONTRIBUTION_METHODS})
+        method = e.get("method") if e.get("method") in CONTRIBUTION_METHODS else "Other"
+        bucket[method] = bucket.get(method, 0.0) + e["amount"]
+    rows = []
+    totals = {m: 0.0 for m in CONTRIBUTION_METHODS}
+    for d in sorted(by_date.keys()):
+        rec = {"date": d, "date_display": format_display_dt(d)}
+        day_total = 0.0
+        for m in CONTRIBUTION_METHODS:
+            rec[m] = by_date[d].get(m, 0.0)
+            totals[m] += rec[m]
+            day_total += rec[m]
+        rec["Total"] = day_total
+        rows.append(rec)
+    n = len(rows) or 1
+    averages = {m: (totals[m] / n if rows else 0.0) for m in CONTRIBUTION_METHODS}
+    averages["Total"] = sum(totals.values()) / n if rows else 0.0
+    grand = dict(totals)
+    grand["Total"] = sum(totals.values())
+    return {
+        "methods": list(CONTRIBUTION_METHODS),
+        "rows": rows,
+        "averages": averages,
+        "grand_totals": grand,
+        "date_count": len(rows),
+        "entry_count": len(entries),
+        "date_from": date_from,
+        "date_to": date_to,
+        "memo": memo,
+    }
+
+
+@app.route("/api/contributors", methods=["GET", "POST"])
+def api_contributors():
+    denied = require_admin_api()
+    if denied:
+        return denied
+    db = get_db()
+    cur = db.cursor()
+    if request.method == "GET":
+        q = (request.args.get("search") or "").strip()
+        sql = "SELECT * FROM contributors"
+        params = []
+        if q:
+            sql += """ WHERE first_name LIKE ? OR last_name LIKE ? OR address_line1 LIKE ?
+                       OR city LIKE ? OR zip LIKE ?"""
+            like = f"%{q}%"
+            params = [like, like, like, like, like]
+        sql += " ORDER BY last_name, first_name"
+        cur.execute(sql, params)
+        return jsonify([serialize_contributor(r) for r in cur.fetchall()])
+
+    data = request.get_json() or {}
+    first = (data.get("first_name") or "").strip()
+    last = (data.get("last_name") or "").strip()
+    if not first or not last:
+        return jsonify({"error": "First name and last name are required"}), 400
+    cur.execute(
+        """
+        INSERT INTO contributors (first_name, last_name, address_line1, address_line2, city, state, zip)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            first, last,
+            (data.get("address_line1") or "").strip(),
+            (data.get("address_line2") or "").strip(),
+            (data.get("city") or "").strip(),
+            (data.get("state") or "").strip(),
+            (data.get("zip") or "").strip(),
+        ),
+    )
+    db.commit()
+    return jsonify(serialize_contributor(get_contributor(cur.lastrowid))), 201
+
+
+@app.route("/api/contributors/<int:cid>", methods=["GET", "PUT", "DELETE"])
+def api_contributor(cid):
+    denied = require_admin_api()
+    if denied:
+        return denied
+    db = get_db()
+    cur = db.cursor()
+    person = get_contributor(cid)
+    if not person:
+        return jsonify({"error": "Contributor not found"}), 404
+    if request.method == "GET":
+        return jsonify(serialize_contributor(person))
+    if request.method == "DELETE":
+        cur.execute("SELECT COUNT(*) AS c FROM contribution_entries WHERE contributor_id=?", (cid,))
+        if cur.fetchone()["c"]:
+            return jsonify({"error": "Cannot delete a contributor who has contribution entries"}), 400
+        cur.execute("DELETE FROM contributors WHERE id=?", (cid,))
+        db.commit()
+        return "", 204
+    data = request.get_json() or {}
+    first = (data.get("first_name") or person["first_name"]).strip()
+    last = (data.get("last_name") or person["last_name"]).strip()
+    if not first or not last:
+        return jsonify({"error": "First name and last name are required"}), 400
+    cur.execute(
+        """
+        UPDATE contributors SET first_name=?, last_name=?, address_line1=?, address_line2=?,
+            city=?, state=?, zip=?
+        WHERE id=?
+        """,
+        (
+            first, last,
+            (data.get("address_line1") if "address_line1" in data else person.get("address_line1") or "").strip(),
+            (data.get("address_line2") if "address_line2" in data else person.get("address_line2") or "").strip(),
+            (data.get("city") if "city" in data else person.get("city") or "").strip(),
+            (data.get("state") if "state" in data else person.get("state") or "").strip(),
+            (data.get("zip") if "zip" in data else person.get("zip") or "").strip(),
+            cid,
+        ),
+    )
+    db.commit()
+    return jsonify(serialize_contributor(get_contributor(cid)))
+
+
+@app.route("/api/contribution_entries", methods=["GET", "POST"])
+def api_contribution_entries():
+    denied = require_admin_api()
+    if denied:
+        return denied
+    db = get_db()
+    cur = db.cursor()
+    if request.method == "GET":
+        where, params = contribution_entry_filters()
+        return jsonify(list_contribution_entries_filtered(where, params))
+
+    data = request.get_json() or {}
+    try:
+        cid = int(data.get("contributor_id"))
+    except (TypeError, ValueError):
+        return jsonify({"error": "Contributor is required"}), 400
+    if not get_contributor(cid):
+        return jsonify({"error": "Contributor not found"}), 404
+    cdate = (data.get("contribution_date") or "").strip()
+    method = (data.get("method") or "").strip()
+    try:
+        amount = float(data.get("amount"))
+    except (TypeError, ValueError):
+        return jsonify({"error": "A valid amount is required"}), 400
+    if amount <= 0:
+        return jsonify({"error": "Amount must be greater than zero"}), 400
+    if not cdate:
+        return jsonify({"error": "Date is required"}), 400
+    if method not in CONTRIBUTION_METHODS:
+        return jsonify({"error": "Method must be Check, Cash, Breeze, or Other"}), 400
+    me = current_user()
+    cur.execute(
+        """
+        INSERT INTO contribution_entries
+            (contributor_id, contribution_date, amount, method, check_number, memo, created_by_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            cid, cdate, amount, method,
+            (data.get("check_number") or "").strip(),
+            (data.get("memo") or "").strip(),
+            me["id"] if me else None,
+        ),
+    )
+    db.commit()
+    where, params = ["e.id = ?"], [cur.lastrowid]
+    return jsonify(list_contribution_entries_filtered(where, params)[0]), 201
+
+
+@app.route("/api/contribution_entries/<int:eid>", methods=["GET", "PUT", "DELETE"])
+def api_contribution_entry(eid):
+    denied = require_admin_api()
+    if denied:
+        return denied
+    db = get_db()
+    cur = db.cursor()
+    rows = list_contribution_entries_filtered(["e.id = ?"], [eid])
+    if not rows:
+        return jsonify({"error": "Entry not found"}), 404
+    if request.method == "GET":
+        return jsonify(rows[0])
+    if request.method == "DELETE":
+        cur.execute("DELETE FROM contribution_entries WHERE id=?", (eid,))
+        db.commit()
+        return "", 204
+    data = request.get_json() or {}
+    existing = rows[0]
+    try:
+        cid = int(data.get("contributor_id") or existing["contributor_id"])
+    except (TypeError, ValueError):
+        return jsonify({"error": "Contributor is required"}), 400
+    if not get_contributor(cid):
+        return jsonify({"error": "Contributor not found"}), 404
+    cdate = (data.get("contribution_date") or existing["contribution_date"]).strip()
+    method = (data.get("method") or existing["method"]).strip()
+    try:
+        amount = float(data["amount"]) if "amount" in data else float(existing["amount"])
+    except (TypeError, ValueError):
+        return jsonify({"error": "A valid amount is required"}), 400
+    if amount <= 0:
+        return jsonify({"error": "Amount must be greater than zero"}), 400
+    if method not in CONTRIBUTION_METHODS:
+        return jsonify({"error": "Method must be Check, Cash, Breeze, or Other"}), 400
+    cur.execute(
+        """
+        UPDATE contribution_entries SET contributor_id=?, contribution_date=?, amount=?,
+            method=?, check_number=?, memo=?
+        WHERE id=?
+        """,
+        (
+            cid, cdate, amount, method,
+            (data.get("check_number") if "check_number" in data else existing.get("check_number") or "").strip(),
+            (data.get("memo") if "memo" in data else existing.get("memo") or "").strip(),
+            eid,
+        ),
+    )
+    db.commit()
+    return jsonify(list_contribution_entries_filtered(["e.id = ?"], [eid])[0])
+
+
+@app.route("/api/contribution_entries/export")
+def api_contribution_entries_export():
+    denied = require_admin_api()
+    if denied:
+        return denied
+    where, params = contribution_entry_filters()
+    rows = list_contribution_entries_filtered(where, params)
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(["Date", "Contributor", "Check Number", "Method", "Memo", "Amount"])
+    for r in rows:
+        writer.writerow([
+            r.get("contribution_date") or "",
+            r.get("contributor_name") or "",
+            r.get("check_number") or "",
+            r.get("method") or "",
+            r.get("memo") or "",
+            f"{r.get('amount') or 0:.2f}",
+        ])
+    output.seek(0)
+    filename = f"contribution_entries_{datetime.now().strftime('%Y%m%d')}.csv"
+    return send_file(
+        io.BytesIO(output.getvalue().encode("utf-8")),
+        mimetype="text/csv",
+        as_attachment=True,
+        download_name=filename,
+    )
+
+
+@app.route("/api/contribution_entries/import", methods=["POST"])
+def api_contribution_entries_import():
+    denied = require_admin_api()
+    if denied:
+        return denied
+    if "file" not in request.files:
+        return jsonify({"error": "No file provided"}), 400
+    f = request.files["file"]
+    if not f or not f.filename:
+        return jsonify({"error": "No file selected"}), 400
+    name = f.filename.lower()
+    rows = []
+    try:
+        if name.endswith(".xlsx"):
+            if not openpyxl:
+                return jsonify({"error": "Excel import requires openpyxl"}), 400
+            wb = openpyxl.load_workbook(f, data_only=True)
+            ws = wb.active
+            rows = [[c if c is not None else "" for c in row] for row in ws.iter_rows(values_only=True)]
+        else:
+            text = f.read().decode("utf-8-sig")
+            rows = list(csv.reader(io.StringIO(text)))
+    except Exception as e:
+        return jsonify({"error": f"Could not read file: {e}"}), 400
+    if not rows:
+        return jsonify({"error": "File is empty"}), 400
+
+    def norm(h):
+        return re.sub(r"[^a-z0-9]+", "", (h or "").strip().lower())
+
+    header_idx = 0
+    headers = [norm(x) for x in rows[0]]
+    colmap = {}
+    aliases = {
+        "date": ("date", "contributiondate"),
+        "contributor": ("contributor", "name", "contributorname"),
+        "check": ("checknumber", "check", "checkno"),
+        "method": ("method", "methodofpayment", "paymentmethod"),
+        "memo": ("memo", "memodescription", "description"),
+        "amount": ("amount", "amt"),
+    }
+    for key, names in aliases.items():
+        for i, h in enumerate(headers):
+            if h in names:
+                colmap[key] = i
+                break
+    if "date" not in colmap or "contributor" not in colmap or "amount" not in colmap:
+        return jsonify({"error": "File must include Date, Contributor, and Amount columns"}), 400
+
+    db = get_db()
+    cur = db.cursor()
+    me = current_user()
+    added = 0
+    skipped = []
+    created_people = 0
+    for n, row in enumerate(rows[header_idx + 1 :], start=2):
+        if not row or not any(str(c).strip() for c in row if c is not None):
+            continue
+        def cell(key):
+            i = colmap.get(key)
+            if i is None or i >= len(row):
+                return ""
+            v = row[i]
+            if hasattr(v, "strftime"):
+                return v.strftime("%Y-%m-%d")
+            return str(v).strip() if v is not None else ""
+
+        cname = cell("contributor")
+        cdate = cell("date")[:10]
+        if cdate and "/" in cdate:
+            try:
+                cdate = datetime.strptime(cdate, "%m/%d/%Y").strftime("%Y-%m-%d")
+            except ValueError:
+                try:
+                    cdate = datetime.strptime(cdate, "%m/%d/%y").strftime("%Y-%m-%d")
+                except ValueError:
+                    pass
+        method = cell("method") or "Check"
+        if method not in CONTRIBUTION_METHODS:
+            method_l = method.lower()
+            match = next((m for m in CONTRIBUTION_METHODS if m.lower() == method_l), None)
+            method = match or "Other"
+        try:
+            amount = float(str(cell("amount")).replace("$", "").replace(",", ""))
+        except ValueError:
+            skipped.append(f"Row {n}: invalid amount")
+            continue
+        if not cname or not cdate or amount <= 0:
+            skipped.append(f"Row {n}: missing name, date, or amount")
+            continue
+        person = find_contributor_by_name(cname)
+        if not person:
+            if "," in cname:
+                last, first = [p.strip() for p in cname.split(",", 1)]
+            else:
+                bits = cname.split()
+                first, last = (bits[0], " ".join(bits[1:])) if len(bits) >= 2 else (cname, "")
+            if not last:
+                skipped.append(f"Row {n}: could not parse contributor '{cname}'")
+                continue
+            cur.execute(
+                "INSERT INTO contributors (first_name, last_name) VALUES (?, ?)",
+                (first, last),
+            )
+            person = {"id": cur.lastrowid}
+            created_people += 1
+        cur.execute(
+            """
+            INSERT INTO contribution_entries
+                (contributor_id, contribution_date, amount, method, check_number, memo, created_by_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                person["id"], cdate, amount, method,
+                cell("check"), cell("memo"),
+                me["id"] if me else None,
+            ),
+        )
+        added += 1
+    db.commit()
+    msg = f"Imported {added} contribution(s)."
+    if created_people:
+        msg += f" Created {created_people} new contributor(s)."
+    return jsonify({"message": msg, "added": added, "created_contributors": created_people, "errors": skipped[:20]})
+
+
+@app.route("/api/contribution_template", methods=["GET", "PUT"])
+def api_contribution_template():
+    denied = require_admin_api()
+    if denied:
+        return denied
+    if request.method == "GET":
+        body, updated_at, updated_by = get_letter_template_body()
+        return jsonify({
+            "body": body,
+            "updated_at": updated_at,
+            "placeholders": [
+                "{{contributor_name}}", "{{address_block}}", "{{letter_date}}",
+                "{{date_from}}", "{{date_to}}", "{{period_phrase}}",
+                "{{gift_detail}}", "{{total_amount}}", "{{church_name}}",
+            ],
+        })
+    data = request.get_json() or {}
+    body = data.get("body")
+    if body is None or not str(body).strip():
+        return jsonify({"error": "Template body is required"}), 400
+    me = current_user()
+    db = get_db()
+    cur = db.cursor()
+    ensure_letter_template()
+    cur.execute(
+        "UPDATE contribution_letter_template SET body=?, updated_at=datetime('now'), updated_by_id=? WHERE id=1",
+        (body, me["id"] if me else None),
+    )
+    db.commit()
+    return jsonify({"success": True, "body": body})
+
+
+@app.route("/api/contributions/reports/summary")
+def api_contribution_summary():
+    denied = require_admin_api()
+    if denied:
+        return denied
+    date_from = (request.args.get("date_from") or "").strip()
+    date_to = (request.args.get("date_to") or "").strip()
+    memo = (request.args.get("memo") or "").strip()
+    return jsonify(summary_report_data(date_from, date_to, memo))
+
+
+@app.route("/api/contributions/letters")
+def api_contribution_letters():
+    denied = require_admin_api()
+    if denied:
+        return denied
+    date_from = (request.args.get("date_from") or "").strip()
+    date_to = (request.args.get("date_to") or "").strip()
+    memo = (request.args.get("memo") or "").strip()
+    cid = request.args.get("contributor_id")
+    contributor_id = int(cid) if cid and str(cid) not in ("", "all", "0") else None
+    detail = (request.args.get("detail") or "total").strip()
+    if detail not in ("total", "transactions"):
+        detail = "total"
+    letters = letters_for_filters(date_from, date_to, memo, contributor_id, detail)
+    return jsonify({"count": len(letters), "letters": letters})
+
+
+@app.route("/contributions/summary/print")
+def print_contribution_summary():
+    if not is_admin():
+        abort(403)
+    date_from = (request.args.get("date_from") or "").strip()
+    date_to = (request.args.get("date_to") or "").strip()
+    memo = (request.args.get("memo") or "").strip()
+    data = summary_report_data(date_from, date_to, memo)
+    return render_template(
+        "print_contribution_summary.html",
+        data=data,
+        money=format_money_amount,
+        printed_at=format_display_dt(datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
+        printer_name=user_full_name(current_user()) if current_user() else "",
+    )
+
+
+@app.route("/contributions/letters/print")
+def print_contribution_letters():
+    if not is_admin():
+        abort(403)
+    date_from = (request.args.get("date_from") or "").strip()
+    date_to = (request.args.get("date_to") or "").strip()
+    memo = (request.args.get("memo") or "").strip()
+    cid = request.args.get("contributor_id")
+    contributor_id = int(cid) if cid and str(cid) not in ("", "all", "0") else None
+    detail = (request.args.get("detail") or "total").strip()
+    if detail not in ("total", "transactions"):
+        detail = "total"
+    letters = letters_for_filters(date_from, date_to, memo, contributor_id, detail)
+    download = request.args.get("download") in ("1", "true", "yes")
+    html = render_template(
+        "print_contribution_letters.html",
+        letters=letters,
+        autoprint=not download,
+        date_from=format_display_dt(date_from) if date_from else "",
+        date_to=format_display_dt(date_to) if date_to else "",
+    )
+    if download:
+        filename = f"contribution_letters_{datetime.now().strftime('%Y%m%d')}.html"
+        buf = io.BytesIO(html.encode("utf-8"))
+        return send_file(buf, mimetype="text/html", as_attachment=True, download_name=filename)
+    return html
+
+
 # ---------- INIT ----------
 def bootstrap_db():
     """Create schema, seed demo data, ensure passwords and roles exist."""
@@ -2392,6 +3232,7 @@ def bootstrap_db():
     seed_data()
     ensure_user_passwords()
     ensure_user_roles()
+    ensure_letter_template()
     os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 

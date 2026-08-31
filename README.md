@@ -13,6 +13,7 @@ Works great on desktop browsers and mobile devices (responsive Tailwind UI).
 - **General Ledger**: Category + account name (split on `:`), approvers per account. Admin-managed.
 - **Users Management**: Username, name, email, password, **role** (Administrator only).
 - **Status & Lookup**: Filterable list, progress, export, refresh; Users see only their related requests.
+- **Contributions** (Administrators only): Contributors with addresses; contribution entries (check #, method, memo, amount); editable acknowledgment letter template; summary report by date and payment method; printable/downloadable contribution letters.
 - **iOS / Mobile**: Bottom tab bar on phones, safe areas, large touch targets, no input zoom.
 - **Automated Email Workflow**:
   - On keying a request, it is routed to the first approver (Primary) via email.

@@ -202,6 +202,8 @@
       #request-modal > .modal,
       #gl-modal > .modal,
       #user-modal > .modal,
+      #contributor-modal > .modal,
+      #entry-modal > .modal,
       #password-modal > .modal {
         border-bottom-left-radius: 0;
         border-bottom-right-radius: 0;
@@ -210,6 +212,24 @@
     }
 
     .admin-only.hidden-role { display: none !important; }
+
+    .contrib-tab {
+      padding: 8px 14px;
+      border: 1px solid #cbd5e1;
+      background: #fff;
+      border-radius: 999px;
+      font-size: 13px;
+      font-weight: 600;
+      color: #475569;
+      min-height: 40px;
+    }
+    .contrib-tab.active {
+      background: #1e40af;
+      border-color: #1e40af;
+      color: #fff;
+    }
+    .contrib-panel { display: none; }
+    .contrib-panel.active { display: block; }
   </style>
 </head>
 <body class="bg-slate-50 text-slate-800">
@@ -303,6 +323,11 @@
             <i class="fa-solid fa-users w-4"></i>
             <span>Users</span>
           </button>
+          <button onclick="showSection('contributions')" 
+                  class="nav-item admin-only px-4 py-1.5 flex items-center gap-x-2 text-sm font-medium" id="nav-contributions">
+            <i class="fa-solid fa-hand-holding-heart w-4"></i>
+            <span>Contributions</span>
+          </button>
           <button onclick="showSection('emaillog')" 
                   class="nav-item admin-only px-4 py-1.5 flex items-center gap-x-2 text-sm font-medium" id="nav-emaillog">
             <i class="fa-solid fa-envelope w-4"></i>
@@ -328,6 +353,9 @@
       <button type="button" onclick="showSection('users');toggleMobileNav()" class="admin-only tap-target text-left py-3 px-3 hover:bg-slate-50 flex items-center gap-2 rounded-lg">
         <i class="fa-solid fa-users w-5 text-blue-700"></i> Users
       </button>
+      <button type="button" onclick="showSection('contributions');toggleMobileNav()" class="admin-only tap-target text-left py-3 px-3 hover:bg-slate-50 flex items-center gap-2 rounded-lg">
+        <i class="fa-solid fa-hand-holding-heart w-5 text-blue-700"></i> Contributions
+      </button>
       <button type="button" onclick="showSection('emaillog');toggleMobileNav()" class="admin-only tap-target text-left py-3 px-3 hover:bg-slate-50 flex items-center gap-2 rounded-lg">
         <i class="fa-solid fa-envelope w-5 text-blue-700"></i> Email Log
       </button>
@@ -351,6 +379,10 @@
     <button type="button" id="bnav-users" class="admin-only" onclick="showSection('users')">
       <i class="fa-solid fa-users"></i>
       <span>Users</span>
+    </button>
+    <button type="button" id="bnav-contributions" class="admin-only" onclick="showSection('contributions')">
+      <i class="fa-solid fa-hand-holding-heart"></i>
+      <span>Giving</span>
     </button>
     <button type="button" id="bnav-emaillog" class="admin-only" onclick="showSection('emaillog')">
       <i class="fa-solid fa-envelope"></i>
@@ -652,6 +684,189 @@
         <div id="email-log-list" class="divide-y max-h-[520px] overflow-auto text-sm"></div>
       </div>
     </div>
+
+    <!-- CONTRIBUTIONS (admin) -->
+    <div id="section-contributions" class="section admin-only">
+      <div class="mb-4">
+        <h1 class="text-2xl font-semibold tracking-tight">Contributions</h1>
+        <p class="text-sm text-slate-500">Administrator-only giving records, letters, and reports</p>
+      </div>
+      <div class="flex flex-wrap gap-2 mb-5" id="contrib-tabs">
+        <button type="button" class="contrib-tab active" data-panel="contributors" onclick="showContribPanel('contributors')">Contributors</button>
+        <button type="button" class="contrib-tab" data-panel="entries" onclick="showContribPanel('entries')">Contribution entries</button>
+        <button type="button" class="contrib-tab" data-panel="template" onclick="showContribPanel('template')">Contribution template</button>
+        <button type="button" class="contrib-tab" data-panel="summary" onclick="showContribPanel('summary')">Summary report</button>
+        <button type="button" class="contrib-tab" data-panel="letters" onclick="showContribPanel('letters')">Contribution letters</button>
+      </div>
+
+      <!-- Contributors -->
+      <div id="contrib-panel-contributors" class="contrib-panel active">
+        <div class="flex flex-wrap items-end justify-between gap-3 mb-3">
+          <input id="contributor-search" type="text" placeholder="Search name or address..."
+                 class="filter-input border border-slate-300 rounded-lg px-3 py-2 text-sm w-full sm:w-72"
+                 onkeyup="if (event.key === 'Enter') loadContributors()">
+          <button type="button" onclick="openContributorModal()" class="px-4 py-2 bg-blue-800 text-white text-sm font-semibold rounded-xl">
+            <i class="fa-solid fa-user-plus mr-1"></i> Add contributor
+          </button>
+        </div>
+        <div class="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-sm">
+          <div class="overflow-x-auto">
+            <table class="w-full text-sm">
+              <thead>
+                <tr class="bg-slate-50 border-b text-xs text-left font-semibold text-slate-600">
+                  <th class="px-5 py-3">Name</th>
+                  <th class="px-4 py-3">Address</th>
+                  <th class="px-3 py-3 w-24 text-right">Actions</th>
+                </tr>
+              </thead>
+              <tbody id="contributors-table-body" class="divide-y"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- Entries -->
+      <div id="contrib-panel-entries" class="contrib-panel">
+        <div class="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm mb-4">
+          <div class="grid grid-cols-2 md:grid-cols-5 gap-3">
+            <div>
+              <label class="block text-xs font-medium text-slate-500 mb-1">Date from</label>
+              <input type="date" id="entry-filter-from" class="filter-input w-full border border-slate-300 rounded-lg px-3 py-1.5 text-sm">
+            </div>
+            <div>
+              <label class="block text-xs font-medium text-slate-500 mb-1">Date to</label>
+              <input type="date" id="entry-filter-to" class="filter-input w-full border border-slate-300 rounded-lg px-3 py-1.5 text-sm">
+            </div>
+            <div>
+              <label class="block text-xs font-medium text-slate-500 mb-1">Contributor</label>
+              <select id="entry-filter-person" class="filter-input w-full border border-slate-300 rounded-lg px-3 py-1.5 text-sm bg-white">
+                <option value="">All</option>
+              </select>
+            </div>
+            <div>
+              <label class="block text-xs font-medium text-slate-500 mb-1">Memo</label>
+              <input type="text" id="entry-filter-memo" placeholder="Contains..." class="filter-input w-full border border-slate-300 rounded-lg px-3 py-1.5 text-sm">
+            </div>
+            <div class="flex items-end gap-2">
+              <button type="button" onclick="loadContributionEntries()" class="px-4 py-2 bg-blue-800 text-white text-sm font-semibold rounded-lg">Filter</button>
+              <button type="button" onclick="clearEntryFilters()" class="px-3 py-2 border border-slate-300 rounded-lg text-sm">Clear</button>
+            </div>
+          </div>
+        </div>
+        <div class="flex flex-wrap gap-2 mb-3">
+          <button type="button" onclick="openEntryModal()" class="px-4 py-2 bg-blue-800 text-white text-sm font-semibold rounded-xl">
+            <i class="fa-solid fa-plus mr-1"></i> Add entry
+          </button>
+          <label class="px-4 py-2 bg-white border border-slate-300 text-sm font-semibold rounded-xl cursor-pointer">
+            <i class="fa-solid fa-file-import mr-1 text-blue-800"></i> Upload CSV/Excel
+            <input type="file" id="entry-import-file" class="hidden" accept=".csv,.xlsx,.txt" onchange="importContributionEntries(this)">
+          </label>
+          <button type="button" onclick="exportContributionEntries()" class="px-4 py-2 bg-white border border-slate-300 text-sm font-semibold rounded-xl">
+            <i class="fa-solid fa-download mr-1"></i> Download
+          </button>
+        </div>
+        <p class="text-xs text-slate-500 mb-2">Upload columns: Date, Contributor, Check Number, Method, Memo, Amount. Unknown names are added as new contributors.</p>
+        <div class="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-sm">
+          <div class="overflow-x-auto">
+            <table class="w-full text-sm">
+              <thead>
+                <tr class="bg-slate-50 border-b text-xs text-left font-semibold text-slate-600">
+                  <th class="px-4 py-3">Date</th>
+                  <th class="px-4 py-3">Contributor</th>
+                  <th class="px-4 py-3">Check #</th>
+                  <th class="px-4 py-3">Method</th>
+                  <th class="px-4 py-3">Memo</th>
+                  <th class="px-4 py-3 text-right">Amount</th>
+                  <th class="px-3 py-3 w-24 text-right">Actions</th>
+                </tr>
+              </thead>
+              <tbody id="entries-table-body" class="divide-y"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- Template -->
+      <div id="contrib-panel-template" class="contrib-panel">
+        <div class="max-w-3xl">
+          <p class="text-sm text-slate-600 mb-3">This wording is used for contribution acknowledgment letters. Placeholders are replaced when you generate letters.</p>
+          <div class="text-xs text-slate-500 mb-2" id="template-placeholders"></div>
+          <textarea id="letter-template-body" rows="18" class="w-full border border-slate-300 rounded-xl px-3 py-2 text-sm font-mono" style="font-size:14px"></textarea>
+          <div class="flex gap-2 mt-3">
+            <button type="button" onclick="saveLetterTemplate()" class="px-5 py-2 bg-blue-800 text-white text-sm font-semibold rounded-xl">Save template</button>
+            <button type="button" onclick="loadLetterTemplate()" class="px-4 py-2 border border-slate-300 text-sm rounded-xl">Reload</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Summary report -->
+      <div id="contrib-panel-summary" class="contrib-panel">
+        <div class="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm mb-4">
+          <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
+            <div>
+              <label class="block text-xs font-medium text-slate-500 mb-1">Date from</label>
+              <input type="date" id="summary-from" class="filter-input w-full border border-slate-300 rounded-lg px-3 py-1.5 text-sm">
+            </div>
+            <div>
+              <label class="block text-xs font-medium text-slate-500 mb-1">Date to</label>
+              <input type="date" id="summary-to" class="filter-input w-full border border-slate-300 rounded-lg px-3 py-1.5 text-sm">
+            </div>
+            <div>
+              <label class="block text-xs font-medium text-slate-500 mb-1">Memo filter</label>
+              <input type="text" id="summary-memo" placeholder="Contains..." class="filter-input w-full border border-slate-300 rounded-lg px-3 py-1.5 text-sm">
+            </div>
+            <div class="flex items-end gap-2">
+              <button type="button" onclick="runSummaryReport()" class="px-4 py-2 bg-blue-800 text-white text-sm font-semibold rounded-lg">Run report</button>
+              <button type="button" onclick="printSummaryReport()" class="px-3 py-2 border border-slate-300 rounded-lg text-sm"><i class="fa-solid fa-print"></i></button>
+            </div>
+          </div>
+        </div>
+        <div id="summary-report-wrap" class="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-sm">
+          <div class="p-6 text-sm text-slate-400">Choose a date range and click Run report.</div>
+        </div>
+      </div>
+
+      <!-- Letters -->
+      <div id="contrib-panel-letters" class="contrib-panel">
+        <div class="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm mb-4">
+          <div class="grid grid-cols-2 md:grid-cols-3 gap-3">
+            <div>
+              <label class="block text-xs font-medium text-slate-500 mb-1">Date from</label>
+              <input type="date" id="letter-from" class="filter-input w-full border border-slate-300 rounded-lg px-3 py-1.5 text-sm">
+            </div>
+            <div>
+              <label class="block text-xs font-medium text-slate-500 mb-1">Date to</label>
+              <input type="date" id="letter-to" class="filter-input w-full border border-slate-300 rounded-lg px-3 py-1.5 text-sm">
+            </div>
+            <div>
+              <label class="block text-xs font-medium text-slate-500 mb-1">Contributor</label>
+              <select id="letter-person" class="filter-input w-full border border-slate-300 rounded-lg px-3 py-1.5 text-sm bg-white">
+                <option value="">Any who meet the criteria</option>
+              </select>
+            </div>
+            <div>
+              <label class="block text-xs font-medium text-slate-500 mb-1">Memo filter</label>
+              <input type="text" id="letter-memo" placeholder="Optional" class="filter-input w-full border border-slate-300 rounded-lg px-3 py-1.5 text-sm">
+            </div>
+            <div>
+              <label class="block text-xs font-medium text-slate-500 mb-1">Letter detail</label>
+              <select id="letter-detail" class="filter-input w-full border border-slate-300 rounded-lg px-3 py-1.5 text-sm bg-white">
+                <option value="total">Total contribution for the period</option>
+                <option value="transactions">List each transaction</option>
+              </select>
+            </div>
+            <div class="flex items-end gap-2 flex-wrap">
+              <button type="button" onclick="previewLetters()" class="px-4 py-2 bg-blue-800 text-white text-sm font-semibold rounded-lg">Preview</button>
+              <button type="button" onclick="printLetters(false)" class="px-3 py-2 border border-slate-300 rounded-lg text-sm"><i class="fa-solid fa-print mr-1"></i>Print</button>
+              <button type="button" onclick="printLetters(true)" class="px-3 py-2 border border-slate-300 rounded-lg text-sm"><i class="fa-solid fa-download mr-1"></i>Download</button>
+            </div>
+          </div>
+        </div>
+        <div id="letters-preview" class="bg-white border border-slate-200 rounded-2xl shadow-sm p-4 text-sm text-slate-500">
+          Select filters and click Preview. Edit letter wording under Contribution template.
+        </div>
+      </div>
+    </div>
   </div>
 
   <!-- GL Modal -->
@@ -769,6 +984,102 @@
     </div>
   </div>
 
+  <!-- Contributor modal -->
+  <div id="contributor-modal" class="hidden fixed inset-0 bg-black/40 flex items-end md:items-center justify-center z-[110]" onclick="if (event.target.id === 'contributor-modal') closeContributorModal()">
+    <div onclick="event.stopImmediatePropagation()" class="modal bg-white w-full md:max-w-lg md:rounded-2xl rounded-t-2xl shadow-xl border">
+      <div class="px-5 py-4 border-b flex items-center">
+        <div class="font-semibold text-lg" id="contributor-modal-title">Add contributor</div>
+        <button type="button" onclick="closeContributorModal()" class="ml-auto text-2xl leading-none text-slate-400">&times;</button>
+      </div>
+      <div class="p-5 space-y-3">
+        <input type="hidden" id="contributor-id">
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="text-xs font-semibold">First name *</label>
+            <input id="contributor-first" type="text" class="w-full mt-1 border border-slate-300 rounded-lg px-3 py-2 text-sm">
+          </div>
+          <div>
+            <label class="text-xs font-semibold">Last name *</label>
+            <input id="contributor-last" type="text" class="w-full mt-1 border border-slate-300 rounded-lg px-3 py-2 text-sm">
+          </div>
+        </div>
+        <div>
+          <label class="text-xs font-semibold">Address</label>
+          <input id="contributor-addr1" type="text" class="w-full mt-1 border border-slate-300 rounded-lg px-3 py-2 text-sm" placeholder="Street">
+          <input id="contributor-addr2" type="text" class="w-full mt-2 border border-slate-300 rounded-lg px-3 py-2 text-sm" placeholder="Apt / suite (optional)">
+        </div>
+        <div class="grid grid-cols-6 gap-2">
+          <div class="col-span-3">
+            <label class="text-xs font-semibold">City</label>
+            <input id="contributor-city" type="text" class="w-full mt-1 border border-slate-300 rounded-lg px-3 py-2 text-sm">
+          </div>
+          <div class="col-span-1">
+            <label class="text-xs font-semibold">State</label>
+            <input id="contributor-state" type="text" maxlength="2" class="w-full mt-1 border border-slate-300 rounded-lg px-3 py-2 text-sm" placeholder="AR">
+          </div>
+          <div class="col-span-2">
+            <label class="text-xs font-semibold">ZIP</label>
+            <input id="contributor-zip" type="text" class="w-full mt-1 border border-slate-300 rounded-lg px-3 py-2 text-sm">
+          </div>
+        </div>
+      </div>
+      <div class="px-5 py-4 border-t flex justify-end gap-2 bg-slate-50 md:rounded-b-2xl">
+        <button type="button" onclick="closeContributorModal()" class="px-4 py-2 text-sm">Cancel</button>
+        <button type="button" onclick="saveContributor()" class="px-6 py-2 bg-blue-800 text-white text-sm font-semibold rounded-xl">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Entry modal -->
+  <div id="entry-modal" class="hidden fixed inset-0 bg-black/40 flex items-end md:items-center justify-center z-[110]" onclick="if (event.target.id === 'entry-modal') closeEntryModal()">
+    <div onclick="event.stopImmediatePropagation()" class="modal bg-white w-full md:max-w-lg md:rounded-2xl rounded-t-2xl shadow-xl border">
+      <div class="px-5 py-4 border-b flex items-center">
+        <div class="font-semibold text-lg" id="entry-modal-title">Add contribution</div>
+        <button type="button" onclick="closeEntryModal()" class="ml-auto text-2xl leading-none text-slate-400">&times;</button>
+      </div>
+      <div class="p-5 space-y-3">
+        <input type="hidden" id="entry-id">
+        <div>
+          <label class="text-xs font-semibold">Contributor *</label>
+          <select id="entry-contributor" class="w-full mt-1 border border-slate-300 rounded-lg px-3 py-2 text-sm bg-white"></select>
+        </div>
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="text-xs font-semibold">Date *</label>
+            <input id="entry-date" type="date" class="w-full mt-1 border border-slate-300 rounded-lg px-3 py-2 text-sm">
+          </div>
+          <div>
+            <label class="text-xs font-semibold">Amount *</label>
+            <input id="entry-amount" type="number" step="0.01" min="0.01" class="w-full mt-1 border border-slate-300 rounded-lg px-3 py-2 text-sm">
+          </div>
+        </div>
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="text-xs font-semibold">Method of payment *</label>
+            <select id="entry-method" class="w-full mt-1 border border-slate-300 rounded-lg px-3 py-2 text-sm bg-white">
+              <option>Check</option>
+              <option>Cash</option>
+              <option>Breeze</option>
+              <option>Other</option>
+            </select>
+          </div>
+          <div>
+            <label class="text-xs font-semibold">Check number</label>
+            <input id="entry-check" type="text" class="w-full mt-1 border border-slate-300 rounded-lg px-3 py-2 text-sm">
+          </div>
+        </div>
+        <div>
+          <label class="text-xs font-semibold">Memo / description</label>
+          <input id="entry-memo" type="text" class="w-full mt-1 border border-slate-300 rounded-lg px-3 py-2 text-sm" placeholder="e.g. Tithe, Building fund">
+        </div>
+      </div>
+      <div class="px-5 py-4 border-t flex justify-end gap-2 bg-slate-50 md:rounded-b-2xl">
+        <button type="button" onclick="closeEntryModal()" class="px-4 py-2 text-sm">Cancel</button>
+        <button type="button" onclick="saveEntry()" class="px-6 py-2 bg-blue-800 text-white text-sm font-semibold rounded-xl">Save</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Change password modal -->
   <div id="password-modal" class="hidden fixed inset-0 bg-black/40 flex items-center justify-center z-[100]" onclick="if (event.target.id === 'password-modal') closePasswordModal()">
     <div onclick="event.stopImmediatePropagation()" class="modal bg-white w-full max-w-md mx-3 rounded-2xl shadow-xl border">
@@ -865,7 +1176,7 @@
     }
 
     function showSection(name) {
-      if (!IS_ADMIN && (name === 'gl' || name === 'users' || name === 'emaillog')) {
+      if (!IS_ADMIN && (name === 'gl' || name === 'users' || name === 'emaillog' || name === 'contributions')) {
         name = 'status';
       }
       // hide all
@@ -890,6 +1201,12 @@
       if (name === 'gl') loadGLAccounts();
       if (name === 'users') loadUsers();
       if (name === 'emaillog') loadEmailLog();
+      if (name === 'contributions') {
+        loadContributors();
+        const panel = document.querySelector('.contrib-panel.active');
+        if (panel && panel.id === 'contrib-panel-entries') loadContributionEntries();
+        if (panel && panel.id === 'contrib-panel-template') loadLetterTemplate();
+      }
     }
 
     function toggleMobileNav() {
@@ -1994,6 +2311,357 @@
       return str.replace(/[&<>"']/g, function(m) {
         return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m];
       });
+    }
+
+    // ===== CONTRIBUTIONS =====
+    let CONTRIBUTORS = [];
+    let CURRENT_ENTRIES = [];
+    const CONTRIB_METHODS = ['Check', 'Cash', 'Breeze', 'Other'];
+
+    function moneyFmt(n) {
+      return Number(n || 0).toLocaleString('en-US', { style: 'currency', currency: 'USD' });
+    }
+
+    function showContribPanel(name) {
+      document.querySelectorAll('.contrib-panel').forEach(p => p.classList.remove('active'));
+      document.querySelectorAll('.contrib-tab').forEach(t => t.classList.toggle('active', t.dataset.panel === name));
+      const panel = document.getElementById('contrib-panel-' + name);
+      if (panel) panel.classList.add('active');
+      if (name === 'contributors') loadContributors();
+      if (name === 'entries') { fillContributorSelects(); loadContributionEntries(); }
+      if (name === 'template') loadLetterTemplate();
+      if (name === 'letters') fillContributorSelects();
+    }
+
+    function fillContributorSelects() {
+      const selects = ['entry-filter-person', 'entry-contributor', 'letter-person'];
+      selects.forEach(id => {
+        const sel = document.getElementById(id);
+        if (!sel) return;
+        const cur = sel.value;
+        const first = sel.options[0] ? sel.options[0].cloneNode(true) : null;
+        sel.innerHTML = '';
+        if (id !== 'entry-contributor') {
+          const o = document.createElement('option');
+          o.value = '';
+          o.textContent = id === 'letter-person' ? 'Any who meet the criteria' : 'All';
+          sel.appendChild(o);
+        } else {
+          const o = document.createElement('option');
+          o.value = '';
+          o.textContent = 'Select contributor...';
+          sel.appendChild(o);
+        }
+        CONTRIBUTORS.forEach(c => {
+          const o = document.createElement('option');
+          o.value = c.id;
+          o.textContent = `${c.last_name}, ${c.first_name}`;
+          sel.appendChild(o);
+        });
+        if (cur) sel.value = cur;
+      });
+    }
+
+    async function loadContributors() {
+      if (!IS_ADMIN) return;
+      const q = (document.getElementById('contributor-search') || {}).value || '';
+      const res = await apiFetch('/api/contributors' + (q ? ('?search=' + encodeURIComponent(q)) : ''));
+      const data = await res.json();
+      CONTRIBUTORS = Array.isArray(data) ? data : [];
+      fillContributorSelects();
+      const tbody = document.getElementById('contributors-table-body');
+      if (!tbody) return;
+      if (!CONTRIBUTORS.length) {
+        tbody.innerHTML = `<tr><td colspan="3" class="px-5 py-8 text-center text-slate-400">No contributors yet.</td></tr>`;
+        return;
+      }
+      tbody.innerHTML = CONTRIBUTORS.map(c => {
+        const addr = [c.address_line1, c.address_line2, [c.city, c.state, c.zip].filter(Boolean).join(' ')].filter(Boolean).join(', ');
+        return `<tr class="hover:bg-slate-50">
+          <td class="px-5 py-3 font-medium">${escapeHtml(c.name || '')}</td>
+          <td class="px-4 py-3 text-slate-600">${escapeHtml(addr || '—')}</td>
+          <td class="px-3 py-3 text-right whitespace-nowrap">
+            <button type="button" class="text-xs px-2 py-1 border rounded-md" onclick="editContributor(${c.id})">Edit</button>
+            <button type="button" class="text-xs px-2 py-1 border border-red-200 text-red-600 rounded-md ml-1" onclick="deleteContributor(${c.id})"><i class="fa-solid fa-trash"></i></button>
+          </td>
+        </tr>`;
+      }).join('');
+    }
+
+    function openContributorModal(c) {
+      document.getElementById('contributor-modal-title').textContent = c ? 'Edit contributor' : 'Add contributor';
+      document.getElementById('contributor-id').value = c ? c.id : '';
+      document.getElementById('contributor-first').value = c ? (c.first_name || '') : '';
+      document.getElementById('contributor-last').value = c ? (c.last_name || '') : '';
+      document.getElementById('contributor-addr1').value = c ? (c.address_line1 || '') : '';
+      document.getElementById('contributor-addr2').value = c ? (c.address_line2 || '') : '';
+      document.getElementById('contributor-city').value = c ? (c.city || '') : '';
+      document.getElementById('contributor-state').value = c ? (c.state || '') : '';
+      document.getElementById('contributor-zip').value = c ? (c.zip || '') : '';
+      const m = document.getElementById('contributor-modal');
+      m.classList.remove('hidden'); m.classList.add('flex');
+    }
+    function closeContributorModal() {
+      const m = document.getElementById('contributor-modal');
+      m.classList.add('hidden'); m.classList.remove('flex');
+    }
+    async function saveContributor() {
+      const id = document.getElementById('contributor-id').value;
+      const payload = {
+        first_name: document.getElementById('contributor-first').value.trim(),
+        last_name: document.getElementById('contributor-last').value.trim(),
+        address_line1: document.getElementById('contributor-addr1').value.trim(),
+        address_line2: document.getElementById('contributor-addr2').value.trim(),
+        city: document.getElementById('contributor-city').value.trim(),
+        state: document.getElementById('contributor-state').value.trim(),
+        zip: document.getElementById('contributor-zip').value.trim()
+      };
+      if (!payload.first_name || !payload.last_name) return alert('First and last name are required.');
+      const res = await apiFetch(id ? '/api/contributors/' + id : '/api/contributors', {
+        method: id ? 'PUT' : 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        return alert(err.error || 'Save failed');
+      }
+      closeContributorModal();
+      await loadContributors();
+    }
+    function editContributor(id) {
+      const c = CONTRIBUTORS.find(x => x.id === id);
+      if (c) openContributorModal(c);
+    }
+    async function deleteContributor(id) {
+      if (!confirm('Delete this contributor?')) return;
+      const res = await apiFetch('/api/contributors/' + id, { method: 'DELETE' });
+      if (!res.ok && res.status !== 204) {
+        const err = await res.json().catch(() => ({}));
+        return alert(err.error || 'Could not delete');
+      }
+      await loadContributors();
+    }
+
+    function entryFilterParams() {
+      const p = new URLSearchParams();
+      const df = document.getElementById('entry-filter-from').value;
+      const dt = document.getElementById('entry-filter-to').value;
+      const cid = document.getElementById('entry-filter-person').value;
+      const memo = document.getElementById('entry-filter-memo').value.trim();
+      if (df) p.set('date_from', df);
+      if (dt) p.set('date_to', dt);
+      if (cid) p.set('contributor_id', cid);
+      if (memo) p.set('memo', memo);
+      return p;
+    }
+    async function loadContributionEntries() {
+      if (!IS_ADMIN) return;
+      if (!CONTRIBUTORS.length) await loadContributors();
+      const res = await apiFetch('/api/contribution_entries?' + entryFilterParams().toString());
+      const data = await res.json();
+      CURRENT_ENTRIES = Array.isArray(data) ? data : [];
+      const tbody = document.getElementById('entries-table-body');
+      if (!CURRENT_ENTRIES.length) {
+        tbody.innerHTML = `<tr><td colspan="7" class="px-5 py-8 text-center text-slate-400">No contribution entries match.</td></tr>`;
+        return;
+      }
+      tbody.innerHTML = CURRENT_ENTRIES.map(e => `<tr class="hover:bg-slate-50">
+        <td class="px-4 py-3">${escapeHtml(e.contribution_date || '')}</td>
+        <td class="px-4 py-3 font-medium">${escapeHtml(e.contributor_name || '')}</td>
+        <td class="px-4 py-3">${escapeHtml(e.check_number || '—')}</td>
+        <td class="px-4 py-3">${escapeHtml(e.method || '')}</td>
+        <td class="px-4 py-3">${escapeHtml(e.memo || '—')}</td>
+        <td class="px-4 py-3 text-right font-semibold tabular-nums">${moneyFmt(e.amount)}</td>
+        <td class="px-3 py-3 text-right whitespace-nowrap">
+          <button type="button" class="text-xs px-2 py-1 border rounded-md" onclick="editEntry(${e.id})">Edit</button>
+          <button type="button" class="text-xs px-2 py-1 border border-red-200 text-red-600 rounded-md ml-1" onclick="deleteEntry(${e.id})"><i class="fa-solid fa-trash"></i></button>
+        </td>
+      </tr>`).join('');
+    }
+    function clearEntryFilters() {
+      document.getElementById('entry-filter-from').value = '';
+      document.getElementById('entry-filter-to').value = '';
+      document.getElementById('entry-filter-person').value = '';
+      document.getElementById('entry-filter-memo').value = '';
+      loadContributionEntries();
+    }
+    function openEntryModal(e) {
+      fillContributorSelects();
+      document.getElementById('entry-modal-title').textContent = e ? 'Edit contribution' : 'Add contribution';
+      document.getElementById('entry-id').value = e ? e.id : '';
+      document.getElementById('entry-contributor').value = e ? e.contributor_id : '';
+      document.getElementById('entry-date').value = e ? (e.contribution_date || '') : new Date().toISOString().slice(0, 10);
+      document.getElementById('entry-amount').value = e ? e.amount : '';
+      document.getElementById('entry-method').value = e ? (e.method || 'Check') : 'Check';
+      document.getElementById('entry-check').value = e ? (e.check_number || '') : '';
+      document.getElementById('entry-memo').value = e ? (e.memo || '') : '';
+      const m = document.getElementById('entry-modal');
+      m.classList.remove('hidden'); m.classList.add('flex');
+    }
+    function closeEntryModal() {
+      const m = document.getElementById('entry-modal');
+      m.classList.add('hidden'); m.classList.remove('flex');
+    }
+    function editEntry(id) {
+      const e = CURRENT_ENTRIES.find(x => x.id === id);
+      if (e) openEntryModal(e);
+    }
+    async function saveEntry() {
+      const id = document.getElementById('entry-id').value;
+      const payload = {
+        contributor_id: parseInt(document.getElementById('entry-contributor').value, 10),
+        contribution_date: document.getElementById('entry-date').value,
+        amount: document.getElementById('entry-amount').value,
+        method: document.getElementById('entry-method').value,
+        check_number: document.getElementById('entry-check').value.trim(),
+        memo: document.getElementById('entry-memo').value.trim()
+      };
+      if (!payload.contributor_id || !payload.contribution_date || !payload.amount) {
+        return alert('Contributor, date, and amount are required.');
+      }
+      const res = await apiFetch(id ? '/api/contribution_entries/' + id : '/api/contribution_entries', {
+        method: id ? 'PUT' : 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        return alert(err.error || 'Save failed');
+      }
+      closeEntryModal();
+      await loadContributionEntries();
+    }
+    async function deleteEntry(id) {
+      if (!confirm('Delete this contribution entry?')) return;
+      await apiFetch('/api/contribution_entries/' + id, { method: 'DELETE' });
+      await loadContributionEntries();
+    }
+    function exportContributionEntries() {
+      window.location = '/api/contribution_entries/export?' + entryFilterParams().toString();
+    }
+    async function importContributionEntries(input) {
+      if (!input.files || !input.files[0]) return;
+      const fd = new FormData();
+      fd.append('file', input.files[0]);
+      const res = await apiFetch('/api/contribution_entries/import', { method: 'POST', body: fd });
+      const data = await res.json().catch(() => ({}));
+      input.value = '';
+      if (!res.ok) return alert(data.error || 'Import failed');
+      await loadContributors();
+      await loadContributionEntries();
+      let msg = data.message || 'Imported.';
+      if (data.errors && data.errors.length) msg += '\n\n' + data.errors.slice(0, 8).join('\n');
+      alert(msg);
+    }
+
+    async function loadLetterTemplate() {
+      if (!IS_ADMIN) return;
+      const res = await apiFetch('/api/contribution_template');
+      const data = await res.json();
+      document.getElementById('letter-template-body').value = data.body || '';
+      document.getElementById('template-placeholders').innerHTML =
+        'Placeholders: ' + (data.placeholders || []).map(p => `<code class="bg-slate-100 px-1 rounded">${p}</code>`).join(' ');
+    }
+    async function saveLetterTemplate() {
+      const body = document.getElementById('letter-template-body').value;
+      const res = await apiFetch('/api/contribution_template', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ body })
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        return alert(err.error || 'Save failed');
+      }
+      alert('Template saved.');
+    }
+
+    async function runSummaryReport() {
+      const p = new URLSearchParams();
+      const df = document.getElementById('summary-from').value;
+      const dt = document.getElementById('summary-to').value;
+      const memo = document.getElementById('summary-memo').value.trim();
+      if (df) p.set('date_from', df);
+      if (dt) p.set('date_to', dt);
+      if (memo) p.set('memo', memo);
+      const res = await apiFetch('/api/contributions/reports/summary?' + p.toString());
+      const data = await res.json();
+      const wrap = document.getElementById('summary-report-wrap');
+      if (!data.rows || !data.rows.length) {
+        wrap.innerHTML = `<div class="p-6 text-sm text-slate-400">No contributions match these filters.</div>`;
+        return;
+      }
+      const methods = data.methods || CONTRIB_METHODS;
+      const th = methods.map(m => `<th class="px-3 py-2 text-right">${m}</th>`).join('') + `<th class="px-3 py-2 text-right">Grand total</th>`;
+      const avg = `<tr class="bg-amber-50 font-semibold">
+        <td class="px-4 py-2">Period average</td>
+        ${methods.map(m => `<td class="px-3 py-2 text-right tabular-nums">${moneyFmt(data.averages[m])}</td>`).join('')}
+        <td class="px-3 py-2 text-right tabular-nums">${moneyFmt(data.averages.Total)}</td>
+      </tr>`;
+      const body = data.rows.map(r => `<tr class="border-t">
+        <td class="px-4 py-2">${escapeHtml(r.date_display || r.date)}</td>
+        ${methods.map(m => `<td class="px-3 py-2 text-right tabular-nums">${moneyFmt(r[m])}</td>`).join('')}
+        <td class="px-3 py-2 text-right tabular-nums font-medium">${moneyFmt(r.Total)}</td>
+      </tr>`).join('');
+      const tot = `<tr class="bg-blue-50 font-bold border-t">
+        <td class="px-4 py-2">Grand total</td>
+        ${methods.map(m => `<td class="px-3 py-2 text-right tabular-nums">${moneyFmt(data.grand_totals[m])}</td>`).join('')}
+        <td class="px-3 py-2 text-right tabular-nums">${moneyFmt(data.grand_totals.Total)}</td>
+      </tr>`;
+      wrap.innerHTML = `<div class="overflow-x-auto"><table class="w-full text-sm">
+        <thead class="bg-slate-50 text-xs text-slate-600"><tr>
+          <th class="px-4 py-2 text-left">Date</th>${th}
+        </tr></thead>
+        <tbody>${avg}${body}${tot}</tbody>
+      </table></div>
+      <div class="px-4 py-2 text-xs text-slate-500">Period average is the column total divided by ${data.date_count} date(s) with contributions.</div>`;
+    }
+    function printSummaryReport() {
+      const p = new URLSearchParams();
+      const df = document.getElementById('summary-from').value;
+      const dt = document.getElementById('summary-to').value;
+      const memo = document.getElementById('summary-memo').value.trim();
+      if (df) p.set('date_from', df);
+      if (dt) p.set('date_to', dt);
+      if (memo) p.set('memo', memo);
+      window.open('/contributions/summary/print?' + p.toString(), '_blank', 'noopener');
+    }
+
+    function letterParams() {
+      const p = new URLSearchParams();
+      const df = document.getElementById('letter-from').value;
+      const dt = document.getElementById('letter-to').value;
+      const cid = document.getElementById('letter-person').value;
+      const memo = document.getElementById('letter-memo').value.trim();
+      const detail = document.getElementById('letter-detail').value;
+      if (df) p.set('date_from', df);
+      if (dt) p.set('date_to', dt);
+      if (cid) p.set('contributor_id', cid);
+      if (memo) p.set('memo', memo);
+      p.set('detail', detail || 'total');
+      return p;
+    }
+    async function previewLetters() {
+      const res = await apiFetch('/api/contributions/letters?' + letterParams().toString());
+      const data = await res.json();
+      const box = document.getElementById('letters-preview');
+      if (!data.count) {
+        box.innerHTML = '<p class="text-slate-400">No contributors match these filters.</p>';
+        return;
+      }
+      box.innerHTML = `<div class="text-sm font-medium mb-3">${data.count} letter(s)</div>` +
+        data.letters.map(l => `<div class="border rounded-xl p-3 mb-2">
+          <div class="font-semibold">${escapeHtml(l.contributor_name)} · ${moneyFmt(l.total)} · ${l.entry_count} gift(s)</div>
+          <pre class="mt-2 text-xs whitespace-pre-wrap text-slate-700 font-sans">${escapeHtml(l.body_text)}</pre>
+        </div>`).join('');
+    }
+    function printLetters(download) {
+      const p = letterParams();
+      if (download) p.set('download', '1');
+      const url = '/contributions/letters/print?' + p.toString();
+      if (download) window.location = url;
+      else window.open(url, '_blank', 'noopener');
     }
 
     // ===== INIT =====

@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Contribution Letters</title>
+  <style>
+    body { font-family: Georgia, "Times New Roman", serif; color: #111; margin: 0; background: #e2e8f0; }
+    .toolbar { position: sticky; top: 0; z-index: 5; display: flex; gap: 8px; justify-content: center; padding: 10px; background: #0f172a; font-family: Calibri, sans-serif; }
+    .toolbar button, .toolbar a { background: #1e40af; color: #fff; border: 0; padding: 8px 14px; border-radius: 8px; font-weight: 600; text-decoration: none; cursor: pointer; }
+    .letter { width: 8.5in; min-height: 11in; margin: 16px auto; background: #fff; padding: 0.9in 1in; box-sizing: border-box; box-shadow: 0 8px 24px rgba(15,23,42,.12); }
+    .letter-body { font-size: 12pt; line-height: 1.45; white-space: normal; }
+    table.gifts { width: 100%; border-collapse: collapse; margin: 12px 0; font-size: 10.5pt; font-family: Calibri, sans-serif; }
+    table.gifts th, table.gifts td { border: 1px solid #94a3b8; padding: 4px 6px; }
+    table.gifts th { background: #f1f5f9; text-align: left; }
+    table.gifts td.amt, table.gifts tfoot td { text-align: right; }
+    table.gifts tfoot { font-weight: 700; }
+    .empty { max-width: 40rem; margin: 3rem auto; background: #fff; padding: 2rem; font-family: Calibri, sans-serif; }
+    @page { size: letter; margin: 0.7in; }
+    @media print {
+      body { background: #fff; }
+      .toolbar { display: none !important; }
+      .letter { margin: 0; padding: 0; box-shadow: none; min-height: 0; width: auto; page-break-after: always; break-after: page; }
+      .letter:last-child { page-break-after: auto; }
+    }
+  </style>
+</head>
+<body>
+  <div class="toolbar">
+    <button type="button" onclick="window.print()">Print</button>
+    <a href="/">Back to AP System</a>
+  </div>
+  {% if not letters %}
+  <div class="empty">
+    <h2>No contribution letters</h2>
+    <p>No contributors have gifts matching the date range, memo, and individual filters you selected.</p>
+  </div>
+  {% endif %}
+  {% for letter in letters %}
+  <section class="letter">
+    <div class="letter-body">{{ letter.body_html|safe }}</div>
+  </section>
+  {% endfor %}
+  <script>
+    window.addEventListener("load", function () {
+      {% if autoprint %}
+      setTimeout(function () { window.print(); }, 300);
+      {% endif %}
+    });
+  </script>
+</body>
+</html>
