@@ -990,6 +990,60 @@ def user_full_name(user):
     return name or user.get("username") or ""
 
 
+def normalize_contribution_date(value):
+    """Store and compare contribution dates as YYYY-MM-DD."""
+    if value is None or value == "":
+        return ""
+    if hasattr(value, "strftime"):
+        return value.strftime("%Y-%m-%d")
+    if isinstance(value, (int, float)):
+        n = float(value)
+        if 20000 <= n <= 80000:
+            return (datetime(1899, 12, 30) + timedelta(days=n)).strftime("%Y-%m-%d")
+        return ""
+    text = str(value).strip()
+    if re.fullmatch(r"\d+(\.\d+)?", text):
+        try:
+            n = float(text)
+            if 20000 <= n <= 80000:
+                return (datetime(1899, 12, 30) + timedelta(days=n)).strftime("%Y-%m-%d")
+        except (ValueError, OverflowError):
+            pass
+    text = text.replace("T", " ")
+    candidates = [text]
+    if " " in text:
+        candidates.append(text.split(" ", 1)[0])
+    for candidate in candidates:
+        for fmt in (
+            "%Y-%m-%d",
+            "%Y-%m-%d %H:%M:%S",
+            "%Y-%m-%d %H:%M:%S.%f",
+            "%m/%d/%Y",
+            "%m/%d/%y",
+            "%m-%d-%Y",
+            "%m-%d-%y",
+        ):
+            try:
+                return datetime.strptime(candidate, fmt).strftime("%Y-%m-%d")
+            except ValueError:
+                continue
+    if re.match(r"^\d{4}-\d{2}-\d{2}", text):
+        return text[:10]
+    return ""
+
+
+def format_display_date(value):
+    """Readable date for contribution lists and letters, e.g. Jan 4, 2026."""
+    iso = normalize_contribution_date(value)
+    if not iso:
+        return format_display_dt(value) if value else "—"
+    try:
+        dt = datetime.strptime(iso, "%Y-%m-%d")
+        return f"{dt.strftime('%b')} {dt.day}, {dt.year}"
+    except ValueError:
+        return format_display_dt(value)
+
+
 def format_display_dt(value):
     """Turn SQLite timestamps into a readable date/time for print and UI."""
     if not value:
@@ -2606,6 +2660,10 @@ def list_contribution_entries_filtered(where, params):
         d = dict_from_row(r)
         d["contributor_name"] = contributor_full_name(d)
         d["amount"] = float(d.get("amount") or 0)
+        iso = normalize_contribution_date(d.get("contribution_date"))
+        if iso:
+            d["contribution_date"] = iso
+        d["contribution_date_display"] = format_display_date(d.get("contribution_date"))
         rows.append(d)
     return rows
 
@@ -2619,7 +2677,7 @@ def build_gift_detail(entries, detail_mode):
             memo = (e.get("memo") or "")[:24]
             chk = (e.get("check_number") or "")[:10]
             lines.append(
-                f"{e.get('contribution_date') or '':<16}{(e.get('method') or ''):<11}{chk:<13}{memo:<28}{format_money_amount(e['amount']):>8}"
+                f"{e.get('contribution_date_display') or format_display_date(e.get('contribution_date')) or '':<16}{(e.get('method') or ''):<11}{chk:<13}{memo:<28}{format_money_amount(e['amount']):>8}"
             )
         lines.append("-" * 76)
         lines.append(f"{'Total':<68}{format_money_amount(total):>8}")
@@ -2638,7 +2696,7 @@ def build_gift_detail_html(entries, detail_mode):
     for e in entries:
         rows.append(
             "<tr>"
-            f"<td>{html_escape(e.get('contribution_date') or '')}</td>"
+            f"<td>{html_escape(e.get('contribution_date_display') or format_display_date(e.get('contribution_date')) or '')}</td>"
             f"<td>{html_escape(e.get('method') or '')}</td>"
             f"<td>{html_escape(e.get('check_number') or '—')}</td>"
             f"<td>{html_escape(e.get('memo') or '—')}</td>"
@@ -2752,7 +2810,7 @@ def summary_report_data(date_from, date_to, memo):
     rows = []
     totals = {m: 0.0 for m in CONTRIBUTION_METHODS}
     for d in sorted(by_date.keys()):
-        rec = {"date": d, "date_display": format_display_dt(d)}
+        rec = {"date": d, "date_display": format_display_date(d)}
         day_total = 0.0
         for m in CONTRIBUTION_METHODS:
             rec[m] = by_date[d].get(m, 0.0)
@@ -2883,7 +2941,7 @@ def api_contribution_entries():
         return jsonify({"error": "Contributor is required"}), 400
     if not get_contributor(cid):
         return jsonify({"error": "Contributor not found"}), 404
-    cdate = (data.get("contribution_date") or "").strip()
+    cdate = normalize_contribution_date(data.get("contribution_date"))
     method = (data.get("method") or "").strip()
     try:
         amount = float(data.get("amount"))
@@ -2938,7 +2996,9 @@ def api_contribution_entry(eid):
         return jsonify({"error": "Contributor is required"}), 400
     if not get_contributor(cid):
         return jsonify({"error": "Contributor not found"}), 404
-    cdate = (data.get("contribution_date") or existing["contribution_date"]).strip()
+    cdate = normalize_contribution_date(
+        data.get("contribution_date") if "contribution_date" in data else existing["contribution_date"]
+    )
     method = (data.get("method") or existing["method"]).strip()
     try:
         amount = float(data["amount"]) if "amount" in data else float(existing["amount"])
@@ -3062,15 +3122,8 @@ def api_contribution_entries_import():
             return str(v).strip() if v is not None else ""
 
         cname = cell("contributor")
-        cdate = cell("date")[:10]
-        if cdate and "/" in cdate:
-            try:
-                cdate = datetime.strptime(cdate, "%m/%d/%Y").strftime("%Y-%m-%d")
-            except ValueError:
-                try:
-                    cdate = datetime.strptime(cdate, "%m/%d/%y").strftime("%Y-%m-%d")
-                except ValueError:
-                    pass
+        raw_date = row[colmap["date"]] if colmap.get("date") is not None and colmap["date"] < len(row) else cell("date")
+        cdate = normalize_contribution_date(raw_date) or normalize_contribution_date(cell("date"))
         method = cell("method") or "Check"
         if method not in CONTRIBUTION_METHODS:
             method_l = method.lower()

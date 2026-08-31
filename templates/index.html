@@ -2322,6 +2322,22 @@
       return Number(n || 0).toLocaleString('en-US', { style: 'currency', currency: 'USD' });
     }
 
+    function todayLocalISO() {
+      const d = new Date();
+      const y = d.getFullYear();
+      const m = String(d.getMonth() + 1).padStart(2, '0');
+      const day = String(d.getDate()).padStart(2, '0');
+      return y + '-' + m + '-' + day;
+    }
+
+    function formatEntryDate(iso) {
+      const s = String(iso || '').slice(0, 10);
+      const m = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+      if (!m) return iso || '';
+      const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+      return months[parseInt(m[2], 10) - 1] + ' ' + parseInt(m[3], 10) + ', ' + m[1];
+    }
+
     function showContribPanel(name) {
       document.querySelectorAll('.contrib-panel').forEach(p => p.classList.remove('active'));
       document.querySelectorAll('.contrib-tab').forEach(t => t.classList.toggle('active', t.dataset.panel === name));
@@ -2467,7 +2483,7 @@
         return;
       }
       tbody.innerHTML = CURRENT_ENTRIES.map(e => `<tr class="hover:bg-slate-50">
-        <td class="px-4 py-3">${escapeHtml(e.contribution_date || '')}</td>
+        <td class="px-4 py-3">${escapeHtml(e.contribution_date_display || formatEntryDate(e.contribution_date) || '')}</td>
         <td class="px-4 py-3 font-medium">${escapeHtml(e.contributor_name || '')}</td>
         <td class="px-4 py-3">${escapeHtml(e.check_number || '—')}</td>
         <td class="px-4 py-3">${escapeHtml(e.method || '')}</td>
@@ -2491,7 +2507,7 @@
       document.getElementById('entry-modal-title').textContent = e ? 'Edit contribution' : 'Add contribution';
       document.getElementById('entry-id').value = e ? e.id : '';
       document.getElementById('entry-contributor').value = e ? e.contributor_id : '';
-      document.getElementById('entry-date').value = e ? (e.contribution_date || '') : new Date().toISOString().slice(0, 10);
+      document.getElementById('entry-date').value = e ? String(e.contribution_date || '').slice(0, 10) : todayLocalISO();
       document.getElementById('entry-amount').value = e ? e.amount : '';
       document.getElementById('entry-method').value = e ? (e.method || 'Check') : 'Check';
       document.getElementById('entry-check').value = e ? (e.check_number || '') : '';
