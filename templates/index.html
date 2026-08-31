@@ -891,12 +891,18 @@
               <label class="block text-xs font-medium text-slate-500 mb-1">Through $</label>
               <input type="number" id="letter-amount-max" step="0.01" min="0" placeholder="0.00" class="filter-input w-full border border-slate-300 rounded-lg px-3 py-1.5 text-sm">
             </div>
-            <div>
-              <label class="block text-xs font-medium text-slate-500 mb-1">Amount applies to</label>
-              <select id="letter-amount-apply" class="filter-input w-full border border-slate-300 rounded-lg px-3 py-1.5 text-sm bg-white">
-                <option value="total">Contributor total for the period</option>
-                <option value="gift">Each individual gift</option>
-              </select>
+            <div class="col-span-2 md:col-span-3">
+              <label class="block text-xs font-medium text-slate-500 mb-1">Amount is</label>
+              <div class="flex flex-wrap gap-x-5 gap-y-2 items-center min-h-[44px]">
+                <label class="inline-flex items-center gap-2 text-sm font-medium cursor-pointer">
+                  <input type="radio" name="letter-amount-apply" value="total" class="w-4 h-4 accent-blue-700" checked>
+                  Total contribution
+                </label>
+                <label class="inline-flex items-center gap-2 text-sm font-medium cursor-pointer">
+                  <input type="radio" name="letter-amount-apply" value="gift" class="w-4 h-4 accent-blue-700">
+                  Individual contribution amounts
+                </label>
+              </div>
             </div>
             <div>
               <label class="block text-xs font-medium text-slate-500 mb-1">Letter detail</label>
@@ -2808,7 +2814,8 @@
       const amountMode = (document.getElementById('letter-amount-mode') || {}).value || 'any';
       const amountMin = (document.getElementById('letter-amount-min') || {}).value;
       const amountMax = (document.getElementById('letter-amount-max') || {}).value;
-      const amountApply = (document.getElementById('letter-amount-apply') || {}).value || 'total';
+      const amountApplyEl = document.querySelector('input[name="letter-amount-apply"]:checked');
+      const amountApply = amountApplyEl ? amountApplyEl.value : 'total';
       if (df) p.set('date_from', df);
       if (dt) p.set('date_to', dt);
       if (cid) p.set('contributor_id', cid);
