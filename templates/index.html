@@ -2344,9 +2344,9 @@
       const panel = document.getElementById('contrib-panel-' + name);
       if (panel) panel.classList.add('active');
       if (name === 'contributors') loadContributors();
-      if (name === 'entries') { fillContributorSelects(); loadContributionEntries(); }
+      if (name === 'entries') { loadContributorOptions().then(loadContributionEntries); }
       if (name === 'template') loadLetterTemplate();
-      if (name === 'letters') fillContributorSelects();
+      if (name === 'letters') loadContributorOptions();
     }
 
     function fillContributorSelects() {
@@ -2378,20 +2378,28 @@
       });
     }
 
-    async function loadContributors() {
+    async function loadContributorOptions() {
       if (!IS_ADMIN) return;
-      const q = (document.getElementById('contributor-search') || {}).value || '';
-      const res = await apiFetch('/api/contributors' + (q ? ('?search=' + encodeURIComponent(q)) : ''));
+      const res = await apiFetch('/api/contributors');
       const data = await res.json();
       CONTRIBUTORS = Array.isArray(data) ? data : [];
       fillContributorSelects();
+    }
+
+    async function loadContributors() {
+      if (!IS_ADMIN) return;
+      await loadContributorOptions();
+      const q = ((document.getElementById('contributor-search') || {}).value || '').trim().toLowerCase();
+      const list = q
+        ? CONTRIBUTORS.filter(c => ((c.name || '') + ' ' + (c.address_block || '') + ' ' + (c.zip || '')).toLowerCase().includes(q))
+        : CONTRIBUTORS;
       const tbody = document.getElementById('contributors-table-body');
       if (!tbody) return;
-      if (!CONTRIBUTORS.length) {
+      if (!list.length) {
         tbody.innerHTML = `<tr><td colspan="3" class="px-5 py-8 text-center text-slate-400">No contributors yet.</td></tr>`;
         return;
       }
-      tbody.innerHTML = CONTRIBUTORS.map(c => {
+      tbody.innerHTML = list.map(c => {
         const addr = [c.address_line1, c.address_line2, [c.city, c.state, c.zip].filter(Boolean).join(' ')].filter(Boolean).join(', ');
         return `<tr class="hover:bg-slate-50">
           <td class="px-5 py-3 font-medium">${escapeHtml(c.name || '')}</td>
@@ -2659,11 +2667,21 @@
       return p;
     }
     async function previewLetters() {
-      const res = await apiFetch('/api/contributions/letters?' + letterParams().toString());
-      const data = await res.json();
       const box = document.getElementById('letters-preview');
+      box.innerHTML = '<p class="text-slate-400">Looking up contributions...</p>';
+      const res = await apiFetch('/api/contributions/letters?' + letterParams().toString());
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        box.innerHTML = `<p class="text-red-600">${escapeHtml(data.error || 'Could not load letters.')}</p>`;
+        return;
+      }
       if (!data.count) {
-        box.innerHTML = '<p class="text-slate-400">No contributors match these filters.</p>';
+        const who = document.getElementById('letter-person');
+        const whoLabel = who && who.value ? (who.options[who.selectedIndex] || {}).text : 'the selected filters';
+        const df = document.getElementById('letter-from').value;
+        const dt = document.getElementById('letter-to').value;
+        box.innerHTML = `<p class="text-slate-600">No contribution letters found for <span class="font-medium">${escapeHtml(whoLabel || 'those filters')}</span>${df || dt ? ' in ' + escapeHtml([df, dt].filter(Boolean).join(' through ')) : ''}.</p>
+          <p class="text-slate-500 mt-2 text-xs">Check that gifts for this person are saved under Contribution entries with dates in that range.</p>`;
         return;
       }
       box.innerHTML = `<div class="text-sm font-medium mb-3">${data.count} letter(s)</div>` +

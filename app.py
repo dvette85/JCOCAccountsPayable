@@ -2616,40 +2616,59 @@ def format_money_amount(amount):
         return "$0.00"
 
 
+def parse_contributor_id(raw):
+    if raw is None:
+        return None
+    text = str(raw).strip()
+    if text.lower() in ("", "all", "any", "0", "none"):
+        return None
+    try:
+        return int(text)
+    except (TypeError, ValueError):
+        return None
+
+
 def contribution_entry_filters():
     where = []
     params = []
     date_from = (request.args.get("date_from") or request.form.get("date_from") or "").strip()
     date_to = (request.args.get("date_to") or request.form.get("date_to") or "").strip()
     memo = (request.args.get("memo") or request.form.get("memo") or "").strip()
-    contributor_id = request.args.get("contributor_id") or request.form.get("contributor_id")
+    contributor_id = parse_contributor_id(
+        request.args.get("contributor_id") or request.form.get("contributor_id")
+    )
     method = (request.args.get("method") or "").strip()
-    if date_from:
-        where.append("e.contribution_date >= ?")
-        params.append(date_from)
-    if date_to:
-        where.append("e.contribution_date <= ?")
-        params.append(date_to)
     if memo:
-        where.append("e.memo LIKE ?")
+        where.append("IFNULL(e.memo,'') LIKE ?")
         params.append(f"%{memo}%")
-    if contributor_id and str(contributor_id) not in ("", "0", "all"):
+    if contributor_id:
         where.append("e.contributor_id = ?")
-        params.append(int(contributor_id))
+        params.append(contributor_id)
     if method and method in CONTRIBUTION_METHODS:
         where.append("e.method = ?")
         params.append(method)
-    return where, params
+    return where, params, date_from, date_to
 
 
-def list_contribution_entries_filtered(where, params):
+def entry_in_date_range(entry, date_from, date_to):
+    iso = normalize_contribution_date(entry.get("contribution_date")) or ""
+    start = normalize_contribution_date(date_from) if date_from else ""
+    end = normalize_contribution_date(date_to) if date_to else ""
+    if start and (not iso or iso < start):
+        return False
+    if end and (not iso or iso > end):
+        return False
+    return True
+
+
+def list_contribution_entries_filtered(where, params, date_from=None, date_to=None):
     db = get_db()
     cur = db.cursor()
     sql = """
         SELECT e.*, c.first_name, c.last_name, c.address_line1, c.address_line2,
                c.city, c.state, c.zip
         FROM contribution_entries e
-        JOIN contributors c ON c.id = e.contributor_id
+        LEFT JOIN contributors c ON c.id = e.contributor_id
     """
     if where:
         sql += " WHERE " + " AND ".join(where)
@@ -2664,7 +2683,10 @@ def list_contribution_entries_filtered(where, params):
         if iso:
             d["contribution_date"] = iso
         d["contribution_date_display"] = format_display_date(d.get("contribution_date"))
+        if not entry_in_date_range(d, date_from, date_to):
+            continue
         rows.append(d)
+    rows.sort(key=lambda e: (e.get("contribution_date") or "", e.get("last_name") or "", e.get("id") or 0))
     return rows
 
 
@@ -2736,19 +2758,14 @@ def apply_letter_template(body, context, gift_html=None):
 
 def letters_for_filters(date_from, date_to, memo, contributor_id, detail_mode):
     where, params = [], []
-    if date_from:
-        where.append("e.contribution_date >= ?")
-        params.append(date_from)
-    if date_to:
-        where.append("e.contribution_date <= ?")
-        params.append(date_to)
     if memo:
-        where.append("e.memo LIKE ?")
+        where.append("IFNULL(e.memo,'') LIKE ?")
         params.append(f"%{memo}%")
-    if contributor_id:
+    cid = parse_contributor_id(contributor_id)
+    if cid:
         where.append("e.contributor_id = ?")
-        params.append(int(contributor_id))
-    entries = list_contribution_entries_filtered(where, params)
+        params.append(cid)
+    entries = list_contribution_entries_filtered(where, params, date_from, date_to)
     grouped = {}
     for e in entries:
         grouped.setdefault(e["contributor_id"], []).append(e)
@@ -2791,16 +2808,10 @@ def letters_for_filters(date_from, date_to, memo, contributor_id, detail_mode):
 
 def summary_report_data(date_from, date_to, memo):
     where, params = [], []
-    if date_from:
-        where.append("e.contribution_date >= ?")
-        params.append(date_from)
-    if date_to:
-        where.append("e.contribution_date <= ?")
-        params.append(date_to)
     if memo:
-        where.append("e.memo LIKE ?")
+        where.append("IFNULL(e.memo,'') LIKE ?")
         params.append(f"%{memo}%")
-    entries = list_contribution_entries_filtered(where, params)
+    entries = list_contribution_entries_filtered(where, params, date_from, date_to)
     by_date = {}
     for e in entries:
         d = e.get("contribution_date") or ""
@@ -2931,8 +2942,8 @@ def api_contribution_entries():
     db = get_db()
     cur = db.cursor()
     if request.method == "GET":
-        where, params = contribution_entry_filters()
-        return jsonify(list_contribution_entries_filtered(where, params))
+        where, params, date_from, date_to = contribution_entry_filters()
+        return jsonify(list_contribution_entries_filtered(where, params, date_from, date_to))
 
     data = request.get_json() or {}
     try:
@@ -3030,8 +3041,8 @@ def api_contribution_entries_export():
     denied = require_admin_api()
     if denied:
         return denied
-    where, params = contribution_entry_filters()
-    rows = list_contribution_entries_filtered(where, params)
+    where, params, date_from, date_to = contribution_entry_filters()
+    rows = list_contribution_entries_filtered(where, params, date_from, date_to)
     output = io.StringIO()
     writer = csv.writer(output)
     writer.writerow(["Date", "Contributor", "Check Number", "Method", "Memo", "Amount"])
@@ -3224,13 +3235,18 @@ def api_contribution_letters():
     date_from = (request.args.get("date_from") or "").strip()
     date_to = (request.args.get("date_to") or "").strip()
     memo = (request.args.get("memo") or "").strip()
-    cid = request.args.get("contributor_id")
-    contributor_id = int(cid) if cid and str(cid) not in ("", "all", "0") else None
+    contributor_id = parse_contributor_id(request.args.get("contributor_id"))
     detail = (request.args.get("detail") or "total").strip()
     if detail not in ("total", "transactions"):
         detail = "total"
     letters = letters_for_filters(date_from, date_to, memo, contributor_id, detail)
-    return jsonify({"count": len(letters), "letters": letters})
+    return jsonify({
+        "count": len(letters),
+        "letters": letters,
+        "date_from": date_from,
+        "date_to": date_to,
+        "contributor_id": contributor_id,
+    })
 
 
 @app.route("/contributions/summary/print")
@@ -3257,8 +3273,7 @@ def print_contribution_letters():
     date_from = (request.args.get("date_from") or "").strip()
     date_to = (request.args.get("date_to") or "").strip()
     memo = (request.args.get("memo") or "").strip()
-    cid = request.args.get("contributor_id")
-    contributor_id = int(cid) if cid and str(cid) not in ("", "all", "0") else None
+    contributor_id = parse_contributor_id(request.args.get("contributor_id"))
     detail = (request.args.get("detail") or "total").strip()
     if detail not in ("total", "transactions"):
         detail = "total"
@@ -3279,6 +3294,28 @@ def print_contribution_letters():
 
 
 # ---------- INIT ----------
+def migrate_contribution_dates():
+    """Rewrite stored contribution dates to YYYY-MM-DD so range filters match."""
+    db = get_db()
+    cur = db.cursor()
+    try:
+        cur.execute("SELECT id, contribution_date FROM contribution_entries")
+    except sqlite3.OperationalError:
+        return
+    changed = 0
+    for row in cur.fetchall():
+        raw = row["contribution_date"]
+        iso = normalize_contribution_date(raw)
+        if iso and iso != (raw or ""):
+            cur.execute(
+                "UPDATE contribution_entries SET contribution_date=? WHERE id=?",
+                (iso, row["id"]),
+            )
+            changed += 1
+    if changed:
+        db.commit()
+
+
 def bootstrap_db():
     """Create schema, seed demo data, ensure passwords and roles exist."""
     init_db()
@@ -3286,6 +3323,7 @@ def bootstrap_db():
     ensure_user_passwords()
     ensure_user_roles()
     ensure_letter_template()
+    migrate_contribution_dates()
     os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 
