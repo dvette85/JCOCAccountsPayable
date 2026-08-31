@@ -705,15 +705,29 @@
           <input id="contributor-search" type="text" placeholder="Search name or address..."
                  class="filter-input border border-slate-300 rounded-lg px-3 py-2 text-sm w-full sm:w-72"
                  onkeyup="if (event.key === 'Enter') loadContributors()">
-          <button type="button" onclick="openContributorModal()" class="px-4 py-2 bg-blue-800 text-white text-sm font-semibold rounded-xl">
-            <i class="fa-solid fa-user-plus mr-1"></i> Add contributor
-          </button>
+          <div class="flex flex-wrap gap-2 items-center">
+            <button type="button" onclick="openContributorModal()" class="px-4 py-2 bg-blue-800 text-white text-sm font-semibold rounded-xl">
+              <i class="fa-solid fa-user-plus mr-1"></i> Add contributor
+            </button>
+            <label class="inline-flex items-center gap-2 px-3 py-2 bg-white border border-slate-300 text-sm font-semibold rounded-xl cursor-pointer select-none">
+              <input type="checkbox" id="contributor-select-all" class="w-4 h-4 accent-blue-700" onchange="toggleSelectAllContributors(this.checked)">
+              Select all
+            </label>
+            <button type="button" id="contributor-delete-selected" onclick="deleteSelectedContributors()" disabled
+                    class="px-4 py-2 border border-red-200 text-red-600 text-sm font-semibold rounded-xl disabled:opacity-40 disabled:cursor-not-allowed">
+              <i class="fa-solid fa-trash mr-1"></i> Delete selected
+            </button>
+            <span id="contributor-selected-count" class="text-xs text-slate-500"></span>
+          </div>
         </div>
         <div class="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-sm">
           <div class="overflow-x-auto">
             <table class="w-full text-sm">
               <thead>
                 <tr class="bg-slate-50 border-b text-xs text-left font-semibold text-slate-600">
+                  <th class="px-3 py-3 w-10">
+                    <input type="checkbox" id="contributor-select-all-head" class="w-4 h-4 accent-blue-700" title="Select all" onchange="toggleSelectAllContributors(this.checked)">
+                  </th>
                   <th class="px-5 py-3">Name</th>
                   <th class="px-4 py-3">Address</th>
                   <th class="px-3 py-3 w-24 text-right">Actions</th>
@@ -2408,12 +2422,16 @@
       const tbody = document.getElementById('contributors-table-body');
       if (!tbody) return;
       if (!list.length) {
-        tbody.innerHTML = `<tr><td colspan="3" class="px-5 py-8 text-center text-slate-400">No contributors yet.</td></tr>`;
+        tbody.innerHTML = `<tr><td colspan="4" class="px-5 py-8 text-center text-slate-400">No contributors yet.</td></tr>`;
+        syncContributorSelection();
         return;
       }
       tbody.innerHTML = list.map(c => {
         const addr = [c.address_line1, c.address_line2, [c.city, c.state, c.zip].filter(Boolean).join(' ')].filter(Boolean).join(', ');
         return `<tr class="hover:bg-slate-50">
+          <td class="px-3 py-3">
+            <input type="checkbox" class="contributor-select w-4 h-4 accent-blue-700" value="${c.id}" onchange="syncContributorSelection()">
+          </td>
           <td class="px-5 py-3 font-medium">${escapeHtml(c.name || '')}</td>
           <td class="px-4 py-3 text-slate-600">${escapeHtml(addr || '—')}</td>
           <td class="px-3 py-3 text-right whitespace-nowrap">
@@ -2422,6 +2440,43 @@
           </td>
         </tr>`;
       }).join('');
+      syncContributorSelection();
+    }
+    function selectedContributorIds() {
+      return Array.from(document.querySelectorAll('.contributor-select:checked')).map(el => parseInt(el.value, 10)).filter(n => n);
+    }
+    function syncContributorSelection() {
+      const boxes = Array.from(document.querySelectorAll('.contributor-select'));
+      const selected = boxes.filter(el => el.checked);
+      const allChecked = boxes.length > 0 && selected.length === boxes.length;
+      ['contributor-select-all', 'contributor-select-all-head'].forEach(id => {
+        const el = document.getElementById(id);
+        if (!el) return;
+        el.checked = allChecked;
+        el.indeterminate = selected.length > 0 && !allChecked;
+      });
+      const btn = document.getElementById('contributor-delete-selected');
+      if (btn) btn.disabled = selected.length === 0;
+      const count = document.getElementById('contributor-selected-count');
+      if (count) count.textContent = selected.length ? (selected.length + ' selected') : '';
+    }
+    function toggleSelectAllContributors(checked) {
+      document.querySelectorAll('.contributor-select').forEach(el => { el.checked = !!checked; });
+      syncContributorSelection();
+    }
+    async function deleteSelectedContributors() {
+      const ids = selectedContributorIds();
+      if (!ids.length) return alert('Select one or more contributors first.');
+      if (!confirm('Delete ' + ids.length + ' selected contributor' + (ids.length === 1 ? '' : 's') + '?\n\nPeople who still have contribution entries will not be deleted.')) return;
+      const res = await apiFetch('/api/contributors/bulk_delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) return alert(data.error || 'Delete failed');
+      await loadContributors();
+      if (data.message) alert(data.message);
     }
 
     function openContributorModal(c) {

@@ -2890,6 +2890,44 @@ def api_contributors():
     return jsonify(serialize_contributor(get_contributor(cur.lastrowid))), 201
 
 
+@app.route("/api/contributors/bulk_delete", methods=["POST"])
+def api_contributors_bulk_delete():
+    denied = require_admin_api()
+    if denied:
+        return denied
+    data = request.get_json() or {}
+    ids = []
+    for value in data.get("ids") or []:
+        try:
+            ids.append(int(value))
+        except (TypeError, ValueError):
+            continue
+    ids = list(dict.fromkeys(i for i in ids if i > 0))
+    if not ids:
+        return jsonify({"error": "No contributors selected"}), 400
+    db = get_db()
+    cur = db.cursor()
+    deleted = 0
+    skipped = []
+    for cid in ids:
+        person = get_contributor(cid)
+        if not person:
+            continue
+        cur.execute("SELECT COUNT(*) AS c FROM contribution_entries WHERE contributor_id=?", (cid,))
+        if cur.fetchone()["c"]:
+            skipped.append(contributor_full_name(person) or f"#{cid}")
+            continue
+        cur.execute("DELETE FROM contributors WHERE id=?", (cid,))
+        deleted += 1
+    db.commit()
+    msg = f"Deleted {deleted} contributor(s)."
+    if skipped:
+        msg += " Could not delete (has contribution entries): " + ", ".join(skipped[:12])
+        if len(skipped) > 12:
+            msg += ", …"
+    return jsonify({"deleted": deleted, "skipped": skipped, "message": msg})
+
+
 @app.route("/api/contributors/<int:cid>", methods=["GET", "PUT", "DELETE"])
 def api_contributor(cid):
     denied = require_admin_api()
