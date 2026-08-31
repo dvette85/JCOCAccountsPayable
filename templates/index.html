@@ -1126,7 +1126,11 @@
         </div>
         <div>
           <label class="text-xs font-semibold">Memo / description</label>
-          <input id="entry-memo" type="text" class="w-full mt-1 border border-slate-300 rounded-lg px-3 py-2 text-sm" placeholder="e.g. Tithe, Building fund">
+          <select id="entry-memo" class="w-full mt-1 border border-slate-300 rounded-lg px-3 py-2 text-sm bg-white" onchange="onMemoSelectChange()">
+            <option value="General Contribution">General Contribution</option>
+            <option value="__new__">Add new…</option>
+          </select>
+          <input id="entry-memo-new" type="text" class="hidden w-full mt-2 border border-slate-300 rounded-lg px-3 py-2 text-sm" placeholder="Enter new memo / description">
         </div>
       </div>
       <div class="px-5 py-4 border-t flex justify-end gap-2 bg-slate-50 md:rounded-b-2xl">
@@ -2372,7 +2376,10 @@
     // ===== CONTRIBUTIONS =====
     let CONTRIBUTORS = [];
     let CURRENT_ENTRIES = [];
+    let CONTRIBUTION_MEMOS = ['General Contribution'];
     const CONTRIB_METHODS = ['Check', 'Cash', 'Breeze', 'Other'];
+    const DEFAULT_MEMO = 'General Contribution';
+    const MEMO_NEW = '__new__';
 
     function moneyFmt(n) {
       return Number(n || 0).toLocaleString('en-US', { style: 'currency', currency: 'USD' });
@@ -2400,7 +2407,7 @@
       const panel = document.getElementById('contrib-panel-' + name);
       if (panel) panel.classList.add('active');
       if (name === 'contributors') loadContributors();
-      if (name === 'entries') { loadContributorOptions().then(loadContributionEntries); }
+      if (name === 'entries') { loadContributorOptions().then(loadContributionEntries); loadContributionMemos(); }
       if (name === 'template') loadLetterTemplate();
       if (name === 'letters') { loadContributorOptions(); syncLetterAmountFields(); }
     }
@@ -2651,8 +2658,55 @@
       document.getElementById('entry-filter-memo').value = '';
       loadContributionEntries();
     }
-    function openEntryModal(e) {
+    async function loadContributionMemos() {
+      if (!IS_ADMIN) return;
+      const res = await apiFetch('/api/contribution_memos');
+      const data = await res.json().catch(() => []);
+      CONTRIBUTION_MEMOS = Array.isArray(data) && data.length ? data : [DEFAULT_MEMO];
+    }
+    function fillMemoSelect(selected) {
+      const sel = document.getElementById('entry-memo');
+      const extra = document.getElementById('entry-memo-new');
+      if (!sel) return;
+      if (extra) { extra.classList.add('hidden'); extra.value = ''; }
+      const wanted = (selected || DEFAULT_MEMO).trim() || DEFAULT_MEMO;
+      const memos = CONTRIBUTION_MEMOS.slice();
+      if (wanted && wanted !== MEMO_NEW && !memos.some(m => m.toLowerCase() === wanted.toLowerCase())) {
+        memos.push(wanted);
+      }
+      sel.innerHTML = '';
+      memos.forEach(m => {
+        const o = document.createElement('option');
+        o.value = m;
+        o.textContent = m;
+        sel.appendChild(o);
+      });
+      const add = document.createElement('option');
+      add.value = MEMO_NEW;
+      add.textContent = 'Add new…';
+      sel.appendChild(add);
+      const match = memos.find(m => m.toLowerCase() === wanted.toLowerCase());
+      sel.value = match || DEFAULT_MEMO;
+    }
+    function onMemoSelectChange() {
+      const sel = document.getElementById('entry-memo');
+      const extra = document.getElementById('entry-memo-new');
+      if (!sel || !extra) return;
+      const isNew = sel.value === MEMO_NEW;
+      extra.classList.toggle('hidden', !isNew);
+      if (isNew) extra.focus();
+    }
+    function currentMemoValue() {
+      const sel = document.getElementById('entry-memo');
+      if (!sel) return DEFAULT_MEMO;
+      if (sel.value === MEMO_NEW) {
+        return ((document.getElementById('entry-memo-new') || {}).value || '').trim();
+      }
+      return (sel.value || '').trim();
+    }
+    async function openEntryModal(e) {
       fillContributorSelects();
+      await loadContributionMemos();
       document.getElementById('entry-modal-title').textContent = e ? 'Edit contribution' : 'Add contribution';
       document.getElementById('entry-id').value = e ? e.id : '';
       document.getElementById('entry-contributor').value = e ? e.contributor_id : '';
@@ -2660,7 +2714,7 @@
       document.getElementById('entry-amount').value = e ? e.amount : '';
       document.getElementById('entry-method').value = e ? (e.method || 'Check') : 'Check';
       document.getElementById('entry-check').value = e ? (e.check_number || '') : '';
-      document.getElementById('entry-memo').value = e ? (e.memo || '') : '';
+      fillMemoSelect(e ? (e.memo || DEFAULT_MEMO) : DEFAULT_MEMO);
       const m = document.getElementById('entry-modal');
       m.classList.remove('hidden'); m.classList.add('flex');
     }
@@ -2680,8 +2734,12 @@
         amount: document.getElementById('entry-amount').value,
         method: document.getElementById('entry-method').value,
         check_number: document.getElementById('entry-check').value.trim(),
-        memo: document.getElementById('entry-memo').value.trim()
+        memo: currentMemoValue()
       };
+      if (document.getElementById('entry-memo').value === MEMO_NEW && !payload.memo) {
+        return alert('Enter a memo / description, or choose one from the list.');
+      }
+      if (!payload.memo) payload.memo = DEFAULT_MEMO;
       if (!payload.contributor_id || !payload.contribution_date || !payload.amount) {
         return alert('Contributor, date, and amount are required.');
       }

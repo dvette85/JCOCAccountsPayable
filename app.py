@@ -52,6 +52,7 @@ MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", 15))
 ROLE_ADMIN = "Administrator"
 ROLE_USER = "User"
 CONTRIBUTION_METHODS = ("Check", "Cash", "Breeze", "Other")
+DEFAULT_CONTRIBUTION_MEMO = "General Contribution"
 DEFAULT_LETTER_TEMPLATE = """Johnson Church of Christ
 Johnson, Arkansas
 
@@ -3050,6 +3051,34 @@ def api_contributor(cid):
     return jsonify(serialize_contributor(get_contributor(cid)))
 
 
+@app.route("/api/contribution_memos")
+def api_contribution_memos():
+    denied = require_admin_api()
+    if denied:
+        return denied
+    db = get_db()
+    cur = db.cursor()
+    cur.execute(
+        """
+        SELECT DISTINCT TRIM(memo) AS memo
+        FROM contribution_entries
+        WHERE TRIM(IFNULL(memo, '')) != ''
+        ORDER BY memo COLLATE NOCASE
+        """
+    )
+    names = []
+    seen = set()
+    for row in cur.fetchall():
+        memo = (row["memo"] or "").strip()
+        key = memo.lower()
+        if memo and key not in seen:
+            seen.add(key)
+            names.append(memo)
+    default = DEFAULT_CONTRIBUTION_MEMO
+    names = [default] + [n for n in names if n.lower() != default.lower()]
+    return jsonify(names)
+
+
 @app.route("/api/contribution_entries", methods=["GET", "POST"])
 def api_contribution_entries():
     denied = require_admin_api()
@@ -3090,7 +3119,7 @@ def api_contribution_entries():
         (
             cid, cdate, amount, method,
             (data.get("check_number") or "").strip(),
-            (data.get("memo") or "").strip(),
+            (data.get("memo") or "").strip() or DEFAULT_CONTRIBUTION_MEMO,
             me["id"] if me else None,
         ),
     )
@@ -3169,7 +3198,7 @@ def api_contribution_entry(eid):
         (
             cid, cdate, amount, method,
             (data.get("check_number") if "check_number" in data else existing.get("check_number") or "").strip(),
-            (data.get("memo") if "memo" in data else existing.get("memo") or "").strip(),
+            ((data.get("memo") if "memo" in data else existing.get("memo") or "").strip() or DEFAULT_CONTRIBUTION_MEMO),
             eid,
         ),
     )
