@@ -477,7 +477,7 @@
                 <th class="px-4 py-3">GL Account</th>
                 <th class="px-4 py-3">Requested By</th>
                 <th class="px-4 py-3">Status / Progress</th>
-                <th class="px-4 py-3 w-48 text-right">Actions</th>
+                <th class="px-4 py-3 w-56 text-right">Actions</th>
               </tr>
             </thead>
             <tbody id="requests-table-body" class="divide-y text-sm"></tbody>
@@ -1506,6 +1506,11 @@
           <td class="px-4 py-3 text-right whitespace-nowrap">
             <button type="button" onclick="viewRequest(${req.id})" 
                     class="text-xs px-3 py-1.5 rounded-md border border-slate-200 hover:bg-white font-medium">View</button>
+            ${req.can_resend ? `<button type="button" onclick="resendApproval(${req.id})"
+                    class="text-xs px-2.5 py-1.5 rounded-md border border-slate-200 hover:bg-white font-medium ml-1"
+                    title="${escapeHtml(resendTitle(req))}">
+              <i class="fa-solid fa-envelope"></i>
+            </button>` : ''}
             <button type="button" onclick="printRequest(${req.id})"
                     class="text-xs px-2.5 py-1.5 rounded-md border border-slate-200 hover:bg-white font-medium ml-1"
                     title="Print one-sheet summary">
@@ -1546,6 +1551,9 @@
 
           <div class="mt-3 flex gap-2">
             <button type="button" onclick="viewRequest(${req.id})" class="tap-target flex-1 text-sm text-center py-2.5 rounded-xl border border-slate-200 font-medium active:bg-slate-50">View / Edit</button>
+            ${req.can_resend ? `<button type="button" onclick="resendApproval(${req.id})" class="tap-target px-4 py-2.5 rounded-xl border border-slate-200 font-medium active:bg-slate-50" title="${escapeHtml(resendTitle(req))}">
+              <i class="fa-solid fa-envelope"></i>
+            </button>` : ''}
             <button type="button" onclick="printRequest(${req.id})" class="tap-target px-4 py-2.5 rounded-xl border border-slate-200 font-medium active:bg-slate-50" title="Print summary">
               <i class="fa-solid fa-print"></i>
             </button>
@@ -2012,6 +2020,16 @@
         actions.appendChild(editBtn);
       }
 
+      if (req.can_resend) {
+        const resendBtn = document.createElement('button');
+        resendBtn.type = 'button';
+        resendBtn.className = 'tap-target flex-1 md:flex-none px-4 py-2.5 bg-white border border-slate-300 hover:bg-slate-50 rounded-xl text-sm font-medium';
+        resendBtn.innerHTML = `<i class="fa-solid fa-envelope mr-1.5"></i> Resend to approver`;
+        resendBtn.title = resendTitle(req);
+        resendBtn.onclick = () => resendApproval(req.id, req);
+        actions.appendChild(resendBtn);
+      }
+
       if (req.status === 'Pending' && req.can_approve) {
         const approveBtn = document.createElement('button');
         approveBtn.type = 'button';
@@ -2082,6 +2100,33 @@
       const w = window.open(url, '_blank', 'noopener,noreferrer');
       if (!w) {
         window.location.href = url;
+      }
+    }
+
+    function resendTitle(req) {
+      const name = (req && req.current_approver_name) || '';
+      return name
+        ? 'Resend approval email to ' + name
+        : 'Resend approval email to the current approver';
+    }
+
+    async function resendApproval(id, req) {
+      const row = req || (CURRENT_REQUESTS || []).find(r => r.id === id) || {};
+      const who = row.current_approver_name || 'the current approver';
+      if (!confirm('Resend the approval email to ' + who + ' for request #' + id + '?')) {
+        return;
+      }
+      try {
+        const res = await apiFetch('/api/requests/' + id + '/resend_approval', { method: 'POST' });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || data.success === false) {
+          throw new Error(data.error || data.message || 'Resend failed');
+        }
+        alert(data.message || 'Approval email resent.');
+      } catch (e) {
+        if (e.message !== 'Authentication required') {
+          alert('Could not resend approval email: ' + e.message);
+        }
       }
     }
 

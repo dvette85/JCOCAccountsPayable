@@ -267,6 +267,49 @@ def user_can_delete_request(user, req):
     return req.get("requested_by_id") == user["id"] and req.get("status") == "Pending"
 
 
+def user_can_resend_approval(user, req):
+    """Admin, requester, or current-step approver may resend a pending approval email."""
+    if not user or not req or req.get("status") != "Pending":
+        return False
+    if user.get("role") == ROLE_ADMIN:
+        return True
+    if req.get("requested_by_id") == user["id"]:
+        return True
+    return user_can_approve_request(user, req)
+
+
+APPROVER_STEP_KEYS = {
+    1: "primary_approver_id",
+    2: "secondary_approver_id",
+    3: "tertiary_approver_id",
+}
+APPROVER_STEP_LABELS = {
+    1: "Primary Approver",
+    2: "Secondary Approver",
+    3: "Tertiary Approver",
+}
+
+
+def request_approver_users(req):
+    """Approver users snapshotted on the request, in step order."""
+    chain = []
+    for key in ("primary_approver_id", "secondary_approver_id", "tertiary_approver_id"):
+        uid = req.get(key) if req else None
+        if uid:
+            u = get_user(uid)
+            if u:
+                chain.append(u)
+    return chain
+
+
+def current_step_approver(req):
+    if not req:
+        return None
+    step = req.get("current_step") or 1
+    uid = req.get(APPROVER_STEP_KEYS.get(step))
+    return get_user(uid) if uid else None
+
+
 def allowed_file(filename):
     if not filename or "." not in filename:
         return False
@@ -1374,6 +1417,52 @@ def get_approver_chain(gl):
                 chain.append(u)
     return chain
 
+def send_current_approval_email(req):
+    """Send (or resend) the approval email to the current-step approver.
+
+    Returns (ok, message, http_status).
+    """
+    if not req or req.get("status") != "Pending":
+        return False, "Request is not pending approval", 400
+
+    gl = get_gl(req.get("gl_account_id"))
+    requester = get_user(req.get("requested_by_id"))
+    chain = request_approver_users(req)
+    if not chain and gl:
+        chain = get_approver_chain(gl)
+    if not chain:
+        return False, "No approver is assigned for this request", 400
+
+    step = req.get("current_step") or 1
+    if step < 1:
+        step = 1
+    if step > len(chain):
+        return False, "No current approver found for this step", 400
+
+    approver = chain[step - 1]
+    if not approver:
+        return False, "No current approver found for this step", 400
+    if not (approver.get("email") or "").strip():
+        name = f"{approver.get('first_name') or ''} {approver.get('last_name') or ''}".strip() or "The approver"
+        return False, f"{name} has no email address on file", 400
+
+    step_label = APPROVER_STEP_LABELS.get(step, f"Step {step} Approver")
+    next_approver = chain[step] if step < len(chain) else None
+    next_name = (
+        f"{next_approver['first_name']} {next_approver['last_name']}" if next_approver else None
+    )
+
+    subject, text, html = build_approval_email(req, gl, requester, approver, step_label, next_name)
+    status = send_email(approver["email"], subject, text, html)
+    name = f"{approver['first_name']} {approver['last_name']}".strip()
+    dest = f"{name} ({approver['email']})"
+    if status == "failed":
+        return False, f"Could not send the approval email to {dest}", 500
+    if status == "simulated":
+        return True, f"Approval email simulated to {dest}", 200
+    return True, f"Approval email resent to {dest}", 200
+
+
 def start_workflow(request_id):
     """Send first email for a newly created request."""
     req = get_request(request_id)
@@ -1397,22 +1486,17 @@ def start_workflow(request_id):
         UPDATE requests SET 
             primary_approver_id = COALESCE(primary_approver_id, ?),
             secondary_approver_id = COALESCE(secondary_approver_id, ?),
-            tertiary_approver_id = COALESCE(tertiary_approver_id, ?)
+            tertiary_approver_id = COALESCE(tertiary_approver_id, ?),
+            current_step = COALESCE(current_step, 1)
         WHERE id=?
     """, (gl.get("primary_approver_id"), gl.get("secondary_approver_id"), gl.get("tertiary_approver_id"), request_id))
     db.commit()
 
-    # Send to first
-    first = chain[0]
-    requester = get_user(req["requested_by_id"])
-    step_label = "Primary Approver"
+    req = get_request(request_id)
+    ok, msg, _status = send_current_approval_email(req)
+    if not ok:
+        print(f"Warning: could not send first approval email for request #{request_id}: {msg}")
 
-    next_name = chain[1]["first_name"] + " " + chain[1]["last_name"] if len(chain) > 1 else None
-
-    subject, text, html = build_approval_email(req, gl, requester, first, step_label, next_name)
-    send_email(first["email"], subject, text, html)
-
-    # Update current_step to 1
     cur.execute("UPDATE requests SET current_step=1 WHERE id=?", (request_id,))
     db.commit()
 
@@ -1503,15 +1587,14 @@ Johnson Church of Christ AP System
     cur.execute("UPDATE requests SET current_step=? WHERE id=?", (next_step, request_id))
     db.commit()
 
-    # Send email to next
-    step_labels = {1: "Primary", 2: "Secondary", 3: "Tertiary"}
-    step_label = f"{step_labels.get(next_step, 'Step ' + str(next_step))} Approver"
-
-    next_next = chain[next_step] if next_step < len(chain) else None
-    next_next_name = f"{next_next['first_name']} {next_next['last_name']}" if next_next else None
-
-    subject, text, html = build_approval_email(req, gl, requester, next_approver, step_label, next_next_name)
-    send_email(next_approver["email"], subject, text, html)
+    req = get_request(request_id)
+    ok, msg, _status = send_current_approval_email(req)
+    if not ok:
+        print(f"Warning: could not email next approver for request #{request_id}: {msg}")
+        return True, (
+            f"Approved. Routed to {next_approver['first_name']} {next_approver['last_name']}, "
+            f"but the approval email could not be sent: {msg}"
+        )
 
     return True, f"Approved. Routed to {next_approver['first_name']} {next_approver['last_name']}."
 
@@ -2365,6 +2448,11 @@ def api_requests():
         d["can_edit"] = user_can_edit_request(me, d)
         d["can_approve"] = user_can_approve_request(me, d)
         d["can_delete"] = user_can_delete_request(me, d)
+        d["can_resend"] = user_can_resend_approval(me, d)
+        current = current_step_approver(d)
+        d["current_approver_name"] = (
+            f"{current['first_name']} {current['last_name']}".strip() if current else ""
+        )
         results.append(d)
     return jsonify(results)
 
@@ -2387,6 +2475,11 @@ def api_request_detail(req_id):
         req["can_edit"] = user_can_edit_request(me, req)
         req["can_approve"] = user_can_approve_request(me, req)
         req["can_delete"] = user_can_delete_request(me, req)
+        req["can_resend"] = user_can_resend_approval(me, req)
+        current = current_step_approver(req)
+        req["current_approver_name"] = (
+            f"{current['first_name']} {current['last_name']}".strip() if current else ""
+        )
         return jsonify(req)
 
     if request.method == "DELETE":
@@ -2543,6 +2636,22 @@ def api_manual_action(req_id):
     else:
         ok, msg = advance_or_complete(req_id, approver_id, "rejected", notes or "Rejected via UI")
     return jsonify({"success": ok, "message": msg})
+
+
+@app.route("/api/requests/<int:req_id>/resend_approval", methods=["POST"])
+def api_resend_approval(req_id):
+    """Resend the current-step approval email for a pending request."""
+    me = current_user()
+    req = get_request(req_id)
+    if not req:
+        return jsonify({"error": "Request not found"}), 404
+    if req.get("status") != "Pending":
+        return jsonify({"error": "Can only resend approval emails for pending requests"}), 400
+    if not user_can_resend_approval(me, req):
+        return jsonify({"error": "Not authorized to resend this approval email"}), 403
+    ok, msg, code = send_current_approval_email(req)
+    return jsonify({"success": ok, "message": msg}), code
+
 
 @app.route("/api/export")
 def api_export():
