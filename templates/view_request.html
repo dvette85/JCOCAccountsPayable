@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <title>AP Request #{{ req.id }} • Johnson Church of Christ</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+    body {
+      font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+      -webkit-font-smoothing: antialiased;
+      background: linear-gradient(160deg, #eff6ff 0%, #f8fafc 45%, #f1f5f9 100%);
+    }
+    .purpose { white-space: pre-wrap; }
+    .att-img { max-width: 100%; max-height: 28rem; height: auto; }
+    .pdf-embed { width: 100%; height: 28rem; border: 0; }
+  </style>
+</head>
+<body class="min-h-screen text-slate-800">
+  <header class="bg-blue-800 text-white">
+    <div class="max-w-3xl mx-auto px-4 py-4">
+      <div class="text-xs uppercase tracking-widest text-blue-200 font-semibold">Johnson Church of Christ</div>
+      <h1 class="text-xl font-semibold mt-0.5">Accounts Payable Request #{{ req.id }}</h1>
+      <p class="text-sm text-blue-100 mt-1">Review the description/purpose and attachments, then approve or reject.</p>
+    </div>
+  </header>
+
+  <main class="max-w-3xl mx-auto px-4 py-6 space-y-5">
+    <div class="flex flex-wrap items-center gap-2">
+      {% if status == "Pending" %}
+        <span class="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold bg-amber-100 text-amber-800">Pending</span>
+      {% elif status == "Approved" %}
+        <span class="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold bg-emerald-100 text-emerald-800">Approved</span>
+      {% else %}
+        <span class="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold bg-red-100 text-red-800">{{ status }}</span>
+      {% endif %}
+      <span class="text-sm text-slate-500">{{ vendor }} · {{ amount_display }}</span>
+    </div>
+
+    <section class="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden">
+      <dl class="divide-y divide-slate-100">
+        <div class="grid grid-cols-3 gap-2 px-5 py-3">
+          <dt class="text-xs font-semibold uppercase tracking-wide text-slate-500">Vendor / Payee</dt>
+          <dd class="col-span-2 font-medium">{{ vendor }}</dd>
+        </div>
+        <div class="grid grid-cols-3 gap-2 px-5 py-3">
+          <dt class="text-xs font-semibold uppercase tracking-wide text-slate-500">Invoice #</dt>
+          <dd class="col-span-2">{{ invoice_number }}</dd>
+        </div>
+        <div class="grid grid-cols-3 gap-2 px-5 py-3">
+          <dt class="text-xs font-semibold uppercase tracking-wide text-slate-500">Invoice Date</dt>
+          <dd class="col-span-2">{{ invoice_date }}</dd>
+        </div>
+        <div class="grid grid-cols-3 gap-2 px-5 py-3">
+          <dt class="text-xs font-semibold uppercase tracking-wide text-slate-500">Amount</dt>
+          <dd class="col-span-2 font-semibold tabular-nums">{{ amount_display }}</dd>
+        </div>
+        <div class="grid grid-cols-3 gap-2 px-5 py-3">
+          <dt class="text-xs font-semibold uppercase tracking-wide text-slate-500">GL Account</dt>
+          <dd class="col-span-2">{{ gl_display }}</dd>
+        </div>
+        <div class="grid grid-cols-3 gap-2 px-5 py-3">
+          <dt class="text-xs font-semibold uppercase tracking-wide text-slate-500">Requested By</dt>
+          <dd class="col-span-2">
+            {{ requester_name }}
+            {% if requester_email %}<div class="text-xs text-slate-500">{{ requester_email }}</div>{% endif %}
+          </dd>
+        </div>
+        <div class="px-5 py-4 bg-blue-50/60">
+          <dt class="text-xs font-semibold uppercase tracking-wide text-blue-800 mb-1.5">Description / Purpose</dt>
+          <dd class="purpose text-sm leading-relaxed text-slate-800">{{ description }}</dd>
+        </div>
+      </dl>
+    </section>
+
+    <section class="bg-white border border-slate-200 rounded-2xl shadow-sm p-5">
+      <h2 class="text-sm font-semibold text-slate-800 mb-3"><i class="fa-solid fa-paperclip mr-1.5 text-slate-400"></i>Attachments</h2>
+      {% if attachments %}
+        <ul class="space-y-4">
+          {% for a in attachments %}
+          <li class="border border-slate-200 rounded-xl p-3 bg-slate-50">
+            <div class="flex items-center justify-between gap-2 mb-2">
+              <a class="text-blue-800 font-medium hover:underline truncate" href="{{ a.inline_url }}" target="_blank" rel="noopener">
+                {{ a.original_filename }}
+              </a>
+              <span class="text-[11px] text-slate-400 shrink-0">{{ a.size_label }}</span>
+            </div>
+            {% if a.kind == "image" %}
+              <a href="{{ a.inline_url }}" target="_blank" rel="noopener">
+                <img class="att-img rounded-lg border border-slate-200 bg-white" src="{{ a.inline_url }}" alt="{{ a.original_filename }}">
+              </a>
+            {% elif a.kind == "pdf" %}
+              <object class="pdf-embed rounded-lg border border-slate-200 bg-white" data="{{ a.inline_url }}" type="application/pdf">
+                <p class="text-sm p-3">This PDF could not be embedded. <a class="text-blue-700 underline" href="{{ a.inline_url }}" target="_blank" rel="noopener">Open {{ a.original_filename }}</a></p>
+              </object>
+            {% endif %}
+            <div class="mt-2 flex gap-3 text-xs">
+              <a class="text-blue-700 hover:underline" href="{{ a.inline_url }}" target="_blank" rel="noopener">Open</a>
+              <a class="text-slate-600 hover:underline" href="{{ a.download_url }}">Download</a>
+            </div>
+          </li>
+          {% endfor %}
+        </ul>
+      {% else %}
+        <p class="text-sm text-slate-500">No files were attached to this request.</p>
+      {% endif %}
+    </section>
+
+    {% if approvers %}
+    <section class="bg-white border border-slate-200 rounded-2xl shadow-sm p-5">
+      <h2 class="text-sm font-semibold text-slate-800 mb-3">Approval progress</h2>
+      <ul class="space-y-2 text-sm">
+        {% for a in approvers %}
+        <li class="flex flex-wrap items-center gap-2">
+          <span class="text-slate-500">{{ a.role }}</span>
+          <span class="font-medium">{{ a.name }}</span>
+          <span class="text-xs px-2 py-0.5 rounded-full
+            {% if a.action_key == 'approved' %}bg-emerald-100 text-emerald-800
+            {% elif a.action_key == 'rejected' %}bg-red-100 text-red-800
+            {% elif a.action_key == 'pending' %}bg-blue-100 text-blue-800
+            {% else %}bg-slate-100 text-slate-600{% endif %}">{{ a.action }}</span>
+        </li>
+        {% endfor %}
+      </ul>
+    </section>
+    {% endif %}
+
+    <section class="bg-white border border-slate-200 rounded-2xl shadow-sm p-5">
+      <div class="flex flex-col sm:flex-row gap-3">
+        <a href="{{ approve_url }}" class="flex-1 text-center px-4 py-3 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white font-semibold">
+          <i class="fa-solid fa-check mr-1.5"></i> Approve
+        </a>
+        <a href="{{ reject_url }}" class="flex-1 text-center px-4 py-3 rounded-xl bg-red-600 hover:bg-red-700 text-white font-semibold">
+          <i class="fa-solid fa-xmark mr-1.5"></i> Reject
+        </a>
+      </div>
+      <p class="text-xs text-slate-500 mt-3 text-center">
+        <a href="{{ app_url }}" class="text-blue-700 hover:underline">Open in the AP system</a> (sign-in required)
+      </p>
+    </section>
+  </main>
+</body>
+</html>

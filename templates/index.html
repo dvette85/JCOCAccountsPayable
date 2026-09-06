@@ -1170,8 +1170,8 @@
 
   <!-- Request Detail / Edit Modal -->
   <div id="request-modal" class="hidden fixed inset-0 bg-black/40 flex items-end md:items-center justify-center z-[110]" onclick="if (event.target.id === 'request-modal') closeRequestModal()">
-    <div onclick="event.stopImmediatePropagation()" class="modal bg-white w-full md:w-[640px] md:mx-0 md:rounded-2xl md:m-4 rounded-t-2xl border shadow-xl">
-      <div class="px-5 py-3.5 border-b flex items-center">
+    <div onclick="event.stopImmediatePropagation()" class="modal bg-white w-full md:w-[720px] md:mx-0 md:rounded-2xl md:m-4 rounded-t-2xl border shadow-xl max-h-[92vh] flex flex-col">
+      <div class="px-5 py-3.5 border-b flex items-center shrink-0">
         <div>
           <span class="font-semibold">Request #<span id="detail-id"></span></span>
           <span id="detail-status-badge" class="ml-2"></span>
@@ -1179,7 +1179,7 @@
         <button onclick="closeRequestModal()" class="ml-auto text-slate-400 hover:text-slate-700 text-2xl leading-none">&times;</button>
       </div>
 
-      <div class="p-5 text-sm space-y-4" id="request-detail-content">
+      <div class="p-5 text-sm space-y-4 overflow-y-auto" id="request-detail-content">
         <!-- Populated by JS -->
       </div>
 
@@ -1222,7 +1222,7 @@
       };
       const res = await fetch(url, opts);
       if (res.status === 401) {
-        window.location.href = '/login?next=' + encodeURIComponent(window.location.pathname);
+        window.location.href = '/login?next=' + encodeURIComponent(window.location.pathname + window.location.search);
         throw new Error('Authentication required');
       }
       return res;
@@ -1481,12 +1481,16 @@
 
         const statusHtml = `<span class="${statusClass}">${req.status}</span>`;
         const amount = Number(req.amount).toLocaleString('en-US', {style:'currency', currency:'USD'});
+        const attCount = (req.attachments || []).length;
+        const attBadge = attCount
+          ? `<i class="fa-solid fa-paperclip text-slate-400 ml-1" title="${attCount} attachment${attCount === 1 ? '' : 's'}"></i>`
+          : '';
 
         // Desktop row
         const tr = document.createElement('tr');
         tr.className = 'hover:bg-slate-50';
         tr.innerHTML = `
-          <td class="px-4 py-3 font-medium text-blue-900 mono">#${req.id}</td>
+          <td class="px-4 py-3 font-medium text-blue-900 mono">#${req.id}${attBadge}</td>
           <td class="px-4 py-3 text-xs text-slate-500">${req.invoice_date || ''}</td>
           <td class="px-4 py-3 font-medium">${req.vendor}</td>
           <td class="px-4 py-3 font-semibold tabular-nums">${amount}</td>
@@ -1524,6 +1528,7 @@
             <div class="min-w-0">
               <span class="font-semibold">#${req.id}</span>
               <span class="ml-2 ${statusClass}">${req.status}</span>
+              ${attBadge}
             </div>
             <div class="font-semibold tabular-nums shrink-0">${amount}</div>
           </div>
@@ -1834,6 +1839,45 @@
       showSection('status');
     }
 
+    function attachmentUrl(id, opts) {
+      const q = [];
+      if (opts && opts.inline) q.push('inline=1');
+      if (opts && opts.download) q.push('download=1');
+      return '/api/attachments/' + id + (q.length ? '?' + q.join('&') : '');
+    }
+
+    function renderAttachmentList(attachments) {
+      if (!attachments || !attachments.length) {
+        return `<div class="text-xs text-slate-400">No attachments.</div>`;
+      }
+      let html = `<ul class="space-y-3">`;
+      attachments.forEach(a => {
+        const kind = a.kind || '';
+        const name = escapeHtml(a.original_filename || 'file');
+        const size = a.size_bytes ? Math.round(a.size_bytes / 1024) + ' KB' : (a.size_label || '');
+        const viewUrl = attachmentUrl(a.id, { inline: true });
+        const dlUrl = attachmentUrl(a.id, { download: true });
+        html += `<li class="border border-slate-200 rounded-xl p-3 bg-slate-50">`;
+        html += `<div class="flex items-center justify-between gap-2 mb-2">
+          <a class="text-blue-700 hover:underline truncate font-medium" href="${viewUrl}" target="_blank" rel="noopener">
+            <i class="fa-solid fa-paperclip mr-1"></i>${name}
+          </a>
+          <span class="text-[10px] text-slate-400 shrink-0">${escapeHtml(String(size || ''))}</span>
+        </div>`;
+        if (kind === 'image') {
+          html += `<a href="${viewUrl}" target="_blank" rel="noopener"><img src="${viewUrl}" alt="${name}" class="max-h-64 w-auto rounded-lg border border-slate-200 bg-white"></a>`;
+        } else if (kind === 'pdf') {
+          html += `<iframe src="${viewUrl}" class="w-full h-72 rounded-lg border border-slate-200 bg-white" title="${name}"></iframe>`;
+        }
+        html += `<div class="mt-2 flex gap-3">
+          <a class="text-xs text-blue-700 hover:underline" href="${viewUrl}" target="_blank" rel="noopener">Open</a>
+          <a class="text-xs text-slate-600 hover:underline" href="${dlUrl}">Download</a>
+        </div></li>`;
+      });
+      html += `</ul>`;
+      return html;
+    }
+
     // ===== VIEW / EDIT / DELETE REQUEST =====
     async function deleteRequest(id) {
       if (!confirm('Delete request #' + id + '?\n\nThis permanently removes the request, its approval history, and any pending email approval links. This cannot be undone.')) {
@@ -1867,35 +1911,39 @@
 
       const content = document.getElementById('request-detail-content');
       
+      const requesterName = req.requester
+        ? escapeHtml(req.requester.first_name + ' ' + req.requester.last_name)
+        : '';
+      const requesterEmail = req.requester ? escapeHtml(req.requester.email || '') : '';
+      const notifyName = req.notify_user
+        ? escapeHtml(req.notify_user.first_name + ' ' + req.notify_user.last_name)
+        : '<span class="text-slate-400">—</span>';
+      const glLabel = req.gl
+        ? escapeHtml((req.gl.account_number || '') + ' — ' + (req.gl.name || ''))
+        : '';
+      const descHtml = req.description
+        ? escapeHtml(req.description).replace(/\n/g, '<br>')
+        : '<span class="text-slate-400">—</span>';
+
       let html = `
         <div class="grid grid-cols-2 gap-x-6 gap-y-2 text-sm">
-          <div><span class="text-slate-500">Vendor:</span> <span class="font-medium">${req.vendor}</span></div>
-          <div><span class="text-slate-500">Invoice #:</span> ${req.invoice_number || '—'}</div>
-          <div><span class="text-slate-500">Invoice Date:</span> ${req.invoice_date}</div>
+          <div><span class="text-slate-500">Vendor:</span> <span class="font-medium">${escapeHtml(req.vendor || '')}</span></div>
+          <div><span class="text-slate-500">Invoice #:</span> ${escapeHtml(req.invoice_number || '—')}</div>
+          <div><span class="text-slate-500">Invoice Date:</span> ${escapeHtml(req.invoice_date || '')}</div>
           <div><span class="text-slate-500">Amount:</span> <span class="font-semibold tabular-nums">$${Number(req.amount).toFixed(2)}</span></div>
-          <div class="col-span-2"><span class="text-slate-500">Description:</span><br> ${req.description || '<span class="text-slate-400">—</span>'}</div>
-          <div><span class="text-slate-500">GL Account:</span><br> <span class="font-medium">${req.gl ? req.gl.account_number + ' — ' + req.gl.name : ''}</span></div>
-          <div><span class="text-slate-500">Requested By:</span><br> ${req.requester ? req.requester.first_name + ' ' + req.requester.last_name + '<br><span class="text-xs">' + req.requester.email + '</span>' : ''}</div>
-          <div class="col-span-2"><span class="text-slate-500">Also notify when approved:</span> ${req.notify_user ? (req.notify_user.first_name + ' ' + req.notify_user.last_name) : '<span class="text-slate-400">—</span>'}</div>
+          <div class="col-span-2 rounded-xl bg-blue-50/70 border border-blue-100 px-3 py-2">
+            <span class="text-xs font-semibold uppercase tracking-wide text-blue-800">Description / Purpose</span>
+            <div class="mt-1 whitespace-pre-wrap">${descHtml}</div>
+          </div>
+          <div><span class="text-slate-500">GL Account:</span><br> <span class="font-medium">${glLabel}</span></div>
+          <div><span class="text-slate-500">Requested By:</span><br> ${requesterName}${requesterEmail ? '<br><span class="text-xs">' + requesterEmail + '</span>' : ''}</div>
+          <div class="col-span-2"><span class="text-slate-500">Also notify when approved:</span> ${notifyName}</div>
         </div>
       `;
 
-      // Attachments
+      // Attachments — preview images/PDFs so they can be seen, not only downloaded
       html += `<div class="pt-3 border-t mt-3"><div class="text-xs uppercase tracking-wider text-slate-500 mb-1.5">Attachments</div>`;
-      if (req.attachments && req.attachments.length) {
-        html += `<ul class="space-y-1 text-sm">`;
-        req.attachments.forEach(a => {
-          html += `<li class="flex items-center justify-between gap-2">
-            <a class="text-blue-700 hover:underline truncate" href="/api/attachments/${a.id}" target="_blank" rel="noopener">
-              <i class="fa-solid fa-paperclip mr-1"></i>${a.original_filename}
-            </a>
-            <span class="text-[10px] text-slate-400 shrink-0">${a.size_bytes ? Math.round(a.size_bytes/1024) + ' KB' : ''}</span>
-          </li>`;
-        });
-        html += `</ul>`;
-      } else {
-        html += `<div class="text-xs text-slate-400">No attachments.</div>`;
-      }
+      html += renderAttachmentList(req.attachments);
       html += `<div class="mt-2"><input type="file" id="detail-attachment" class="text-xs w-full" />
         <button type="button" id="detail-attach-btn" class="mt-1 text-xs px-3 py-1.5 rounded-lg border border-slate-200 font-medium">Upload file</button></div>`;
       html += `</div>`;
@@ -2941,6 +2989,11 @@
 
       // Default to status section
       showSection('status');
+
+      const deepId = parseInt(new URLSearchParams(window.location.search).get('req') || '', 10);
+      if (deepId) {
+        viewRequest(deepId);
+      }
 
       // Keyboard support
       document.addEventListener('keydown', function(e) {

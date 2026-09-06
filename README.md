@@ -123,7 +123,7 @@ The app will auto-create `ap.db` SQLite database on first run and seed:
 - Columns include current status and progress (e.g. "Pending - Awaiting Secondary (Name)").
 - Filters: Date range, Account #, free text search (vendor/desc), status.
 - Export CSV of current view.
-- Click **View** on a request to see details or modify if still Pending.
+- Click **View** on a request to see details (including **Description / Purpose** and any uploaded attachments, with image/PDF preview) or modify if still Pending.
 - Click **Print** (printer icon, or **Print** in the detail modal) to open a one-sheet summary: requester, vendor, amount, invoice date/number, description, GL account, and each approver with their action and date. Image and PDF attachments print on following pages when the browser can render them.
 - Click the **trash** icon (or **Delete** in the detail modal) to permanently remove a request.
 - From details you can also see full approval chain.
@@ -138,8 +138,11 @@ The app will auto-create `ap.db` SQLite database on first run and seed:
 
 ### 5. Approval via Email (or direct links)
 - Approval request emails are sent in real time to the assigned approvers.
+- Each email includes the **Description / Purpose**, attachment names, a **View request** link (opens the request and any uploaded files), and **Approve** / **Reject** buttons.
+- **View request** works from the email without signing in (token-based). Images and PDFs display on that page; other files can be opened or downloaded.
 - Emails appear in the **Email Log** tab (with full content and status).
 - Approvers can click the **Approve** or **Reject** buttons directly in the email, or you can copy the links from the Email Log for testing.
+- Signed-in users can also open a request directly at `/requests/<id>`.
 
 ## Email Configuration
 

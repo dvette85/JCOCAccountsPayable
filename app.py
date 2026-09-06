@@ -113,16 +113,37 @@ app.config["PERMANENT_SESSION_LIFETIME"] = 60 * 60 * 24 * 14  # 14 days
 # Trust proxy headers (important for Render, Heroku, etc. so request.host_url and scheme are correct)
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
 
-# Paths that do not require login (token approval links must stay public)
+# Paths that do not require login (token approval / view links must stay public)
 PUBLIC_ENDPOINTS = {
     "login",
     "logout",
     "approve_link",
     "reject_link",
+    "view_request_email",
+    "view_request_email_attachment",
     "forgot_password",
     "reset_password",
     "static",
 }
+
+
+def login_next_target():
+    """Path (+ query) to resume after sign-in. Avoids open redirects."""
+    target = request.full_path or request.path or "/"
+    if target.endswith("?"):
+        target = target[:-1]
+    if not target.startswith("/") or target.startswith("//"):
+        return "/"
+    return target
+
+
+def safe_next_url(value, fallback=None):
+    fallback = fallback or url_for("index")
+    if not value:
+        return fallback
+    if not value.startswith("/") or value.startswith("//"):
+        return fallback
+    return value
 
 
 def login_required(f):
@@ -132,7 +153,7 @@ def login_required(f):
         if not session.get("user_id"):
             if request.path.startswith("/api/"):
                 return jsonify({"error": "Authentication required"}), 401
-            return redirect(url_for("login", next=request.path))
+            return redirect(url_for("login", next=login_next_target()))
         return f(*args, **kwargs)
     return decorated
 
@@ -150,7 +171,7 @@ def require_login():
     if not session.get("user_id"):
         if request.path.startswith("/api/"):
             return jsonify({"error": "Authentication required"}), 401
-        return redirect(url_for("login", next=request.path))
+        return redirect(url_for("login", next=login_next_target()))
     return None
 
 
@@ -772,6 +793,16 @@ def log_email(to_email, subject, body, status="simulated"):
     db.commit()
     return cur.lastrowid
 
+def public_base_url():
+    """Public origin used in emails and token links."""
+    if BASE_URL:
+        return BASE_URL.rstrip("/")
+    try:
+        return request.host_url.rstrip("/")
+    except RuntimeError:
+        return ""
+
+
 def send_email(to_email, subject, text_body, html_body=None):
     """Send or simulate email. Always logs. Attempts real send if SMTP_CONFIG populated."""
     body_to_log = html_body or text_body
@@ -819,16 +850,29 @@ def send_email(to_email, subject, text_body, html_body=None):
     return status
 
 def build_approval_email(request_row, gl_row, requester, approver, step_label, next_approver_name=None):
-    if BASE_URL:
-        base_url = BASE_URL.rstrip("/")
-    else:
-        base_url = request.host_url.rstrip("/")
+    base_url = public_base_url()
     token = create_or_get_token(request_row["id"], request_row["current_step"], approver["id"])
 
+    view_url = f"{base_url}/view/{token}"
+    app_url = f"{base_url}/requests/{request_row['id']}"
     approve_url = f"{base_url}/approve/{token}"
     reject_url = f"{base_url}/reject/{token}"
 
+    description = (request_row.get("description") or "").strip()
+    attachments = list_attachments(request_row["id"])
+    att_names = [a.get("original_filename") or "file" for a in attachments]
+    att_text = ", ".join(att_names) if att_names else "None"
+
     subject = f"AP Approval Needed: Request #{request_row['id']} - {request_row['vendor']} (${request_row['amount']:.2f})"
+
+    requester_name = f"{requester['first_name']} {requester['last_name']}" if requester else "Unknown"
+    requester_email = (requester or {}).get("email") or ""
+    gl_label = f"{gl_row['account_number']} - {gl_row['name']}" if gl_row else ""
+    next_line = (
+        "Next approver after you: " + next_approver_name
+        if next_approver_name
+        else "This is the final approver."
+    )
 
     text = f"""Hello {approver['first_name']},
 
@@ -841,15 +885,24 @@ Vendor / Payee: {request_row['vendor']}
 Invoice #: {request_row['invoice_number'] or 'N/A'}
 Invoice Date: {request_row['invoice_date']}
 Amount: ${request_row['amount']:.2f}
-Description: {request_row['description'] or ''}
+
+Description / Purpose:
+{description or '(none provided)'}
 
 General Ledger Coding:
-  {gl_row['account_number']} - {gl_row['name']}
+  {gl_label}
 
-Requested By: {requester['first_name']} {requester['last_name']} ({requester['email']})
+Requested By: {requester_name} ({requester_email})
+Attachments: {att_text}
 
 Approval Step: {step_label}
-{"Next approver after you: " + next_approver_name if next_approver_name else "This is the final approver."}
+{next_line}
+
+Review this request (opens the request, including any attachments):
+{view_url}
+
+Or sign in to the AP system:
+{app_url}
 
 Please click one of the links below:
 
@@ -860,31 +913,42 @@ Thank you,
 Johnson Church of Christ - Accounts Payable System
 """
 
+    desc_html = html_escape(description).replace("\n", "<br>") if description else "<em>(none provided)</em>"
+    att_html = html_escape(att_text)
+    next_note = html_escape(next_approver_name) if next_approver_name else ""
+
     html = f"""<!doctype html>
 <html><body style="font-family: system-ui, sans-serif; line-height:1.5; color:#222;">
   <h2 style="color:#1e40af;">Johnson Church of Christ</h2>
   <h3>Accounts Payable Request for Approval</h3>
 
-  <p>Hello {approver['first_name']},</p>
+  <p>Hello {html_escape(approver['first_name'])},</p>
 
   <table style="border-collapse:collapse; width:100%; max-width:560px; margin:16px 0;" border="1" cellpadding="8">
     <tr><td><strong>Request ID</strong></td><td>#{request_row['id']}</td></tr>
-    <tr><td><strong>Vendor / Payee</strong></td><td>{request_row['vendor']}</td></tr>
-    <tr><td><strong>Invoice #</strong></td><td>{request_row['invoice_number'] or 'N/A'}</td></tr>
-    <tr><td><strong>Invoice Date</strong></td><td>{request_row['invoice_date']}</td></tr>
+    <tr><td><strong>Vendor / Payee</strong></td><td>{html_escape(request_row['vendor'] or '')}</td></tr>
+    <tr><td><strong>Invoice #</strong></td><td>{html_escape(request_row['invoice_number'] or 'N/A')}</td></tr>
+    <tr><td><strong>Invoice Date</strong></td><td>{html_escape(str(request_row['invoice_date'] or ''))}</td></tr>
     <tr><td><strong>Amount</strong></td><td><strong>${request_row['amount']:.2f}</strong></td></tr>
-    <tr><td><strong>Description</strong></td><td>{request_row['description'] or ''}</td></tr>
-    <tr><td><strong>GL Account</strong></td><td>{gl_row['account_number']} — {gl_row['name']}</td></tr>
-    <tr><td><strong>Requested By</strong></td><td>{requester['first_name']} {requester['last_name']} &lt;{requester['email']}&gt;</td></tr>
-    <tr><td><strong>Current Step</strong></td><td>{step_label}</td></tr>
+    <tr><td style="vertical-align:top;"><strong>Description / Purpose</strong></td><td>{desc_html}</td></tr>
+    <tr><td><strong>GL Account</strong></td><td>{html_escape(gl_label)}</td></tr>
+    <tr><td><strong>Requested By</strong></td><td>{html_escape(requester_name)} &lt;{html_escape(requester_email)}&gt;</td></tr>
+    <tr><td><strong>Attachments</strong></td><td>{att_html}</td></tr>
+    <tr><td><strong>Current Step</strong></td><td>{html_escape(step_label)}</td></tr>
   </table>
 
   <p style="margin:20px 0;">
-    <a href="{approve_url}" style="background:#16a34a;color:white;padding:12px 20px;text-decoration:none;border-radius:6px;font-weight:600;margin-right:12px;">✓ APPROVE</a>
-    <a href="{reject_url}" style="background:#dc2626;color:white;padding:12px 20px;text-decoration:none;border-radius:6px;font-weight:600;">✕ REJECT</a>
+    <a href="{html_escape(view_url)}" style="background:#1e40af;color:white;padding:12px 20px;text-decoration:none;border-radius:6px;font-weight:600;margin-right:12px;display:inline-block;">View request</a>
+  </p>
+  <p style="color:#555;font-size:0.9em;margin-top:-8px;">Opens this request so you can review the description/purpose and any uploaded attachments before approving.</p>
+
+  <p style="margin:20px 0;">
+    <a href="{html_escape(approve_url)}" style="background:#16a34a;color:white;padding:12px 20px;text-decoration:none;border-radius:6px;font-weight:600;margin-right:12px;display:inline-block;">✓ APPROVE</a>
+    <a href="{html_escape(reject_url)}" style="background:#dc2626;color:white;padding:12px 20px;text-decoration:none;border-radius:6px;font-weight:600;display:inline-block;">✕ REJECT</a>
   </p>
 
-  <p style="color:#555;font-size:0.9em;">If approved, this request will be routed to the next approver{(' (' + next_approver_name + ')') if next_approver_name else ''}.</p>
+  <p style="color:#555;font-size:0.9em;">If approved, this request will be routed to the next approver{(' (' + next_note + ')') if next_note else ''}.</p>
+  <p style="color:#555;font-size:0.85em;"><a href="{html_escape(app_url)}">Open in the AP system</a> (sign-in required)</p>
   <p style="color:#555;font-size:0.85em;">Johnson Church of Christ • Accounts Payable System • {datetime.now().strftime('%Y-%m-%d')}</p>
 </body></html>"""
 
@@ -909,6 +973,20 @@ def create_or_get_token(request_id, step, approver_id):
     """, (request_id, step, approver_id, token))
     db.commit()
     return token
+
+def lookup_pending_token(token):
+    """Return pending approval row for a token without consuming it."""
+    if not token:
+        return None
+    db = get_db()
+    cur = db.cursor()
+    cur.execute(
+        "SELECT request_id, step, approver_id, token FROM pending_approvals WHERE token=?",
+        (token,),
+    )
+    row = cur.fetchone()
+    return dict_from_row(row) if row else None
+
 
 def consume_token(token):
     """Return (request_id, step, approver_id) or None. Deletes the token."""
@@ -945,6 +1023,17 @@ def get_gl(gl_id):
     return enrich_gl(dict_from_row(row)) if row else None
 
 
+def enrich_attachment(att):
+    d = dict(att) if isinstance(att, dict) else dict_from_row(att)
+    d["kind"] = attachment_kind(d)
+    if d.get("size_bytes"):
+        kb = d["size_bytes"] / 1024
+        d["size_label"] = f"{kb:.0f} KB" if kb >= 1 else f"{d['size_bytes']} B"
+    else:
+        d["size_label"] = ""
+    return d
+
+
 def list_attachments(request_id):
     db = get_db()
     cur = db.cursor()
@@ -953,12 +1042,41 @@ def list_attachments(request_id):
         "FROM request_attachments WHERE request_id=? ORDER BY uploaded_at",
         (request_id,),
     )
-    return [dict_from_row(r) for r in cur.fetchall()]
+    return [enrich_attachment(r) for r in cur.fetchall()]
+
+
+def send_attachment_response(att):
+    """Send a stored attachment; images and PDFs display inline unless download=1."""
+    if att is None:
+        return jsonify({"error": "Attachment not found"}), 404
+    if not isinstance(att, dict):
+        att = dict_from_row(att)
+    path = os.path.join(UPLOAD_FOLDER, att.get("stored_filename") or "")
+    if not os.path.isfile(path):
+        return jsonify({"error": "File missing on server"}), 404
+    kind = attachment_kind(att)
+    force_download = request.args.get("download", "").lower() in ("1", "true", "yes")
+    force_inline = request.args.get("inline", "").lower() in ("1", "true", "yes")
+    if force_download:
+        as_attachment = True
+    elif force_inline:
+        as_attachment = False
+    else:
+        as_attachment = kind == "file"
+    return send_file(
+        path,
+        mimetype=att.get("content_type") or "application/octet-stream",
+        as_attachment=as_attachment,
+        download_name=att.get("original_filename") or "attachment",
+        max_age=0,
+    )
 
 
 def send_approval_complete_notice(req, gl, recipient):
     if not recipient:
         return
+    view_url = f"{public_base_url()}/requests/{req['id']}"
+    description = (req.get("description") or "").strip() or "(none provided)"
     subject = f"AP Request #{req['id']} FULLY APPROVED - {req['vendor']}"
     body = f"""Hello {recipient['first_name']},
 
@@ -967,9 +1085,13 @@ Good news — AP request #{req['id']} has received all required approvals and is
 Request #{req['id']}
 Vendor: {req['vendor']}
 Amount: ${req['amount']:.2f}
+Description / Purpose: {description}
 GL Account: {gl['account_number'] if gl else ''} - {gl['name'] if gl else ''}
 
 Approved on: {datetime.now().strftime('%Y-%m-%d %H:%M')}
+
+View this request:
+{view_url}
 
 Thank you,
 Johnson Church of Christ
@@ -1198,15 +1320,9 @@ def build_print_context(req, printer=None):
 
     attachments = []
     for att in list_attachments(req["id"]):
-        kind = attachment_kind(att)
         att = dict(att)
-        att["kind"] = kind
         att["inline_url"] = url_for("api_attachment", att_id=att["id"], inline=1)
-        if att.get("size_bytes"):
-            kb = att["size_bytes"] / 1024
-            att["size_label"] = f"{kb:.0f} KB" if kb >= 1 else f"{att['size_bytes']} B"
-        else:
-            att["size_label"] = ""
+        att["download_url"] = url_for("api_attachment", att_id=att["id"], download=1)
         attachments.append(att)
 
     gl_number = (gl or {}).get("account_number") or ""
@@ -1343,6 +1459,10 @@ Amount: ${req['amount']:.2f}
 GL: {gl['account_number']} - {gl['name'] if gl else ''}
 
 Reason: {notes or 'No reason provided'}
+Description / Purpose: {(req.get('description') or '').strip() or '(none provided)'}
+
+View this request:
+{public_base_url()}/requests/{request_id}
 
 Please review and resubmit if needed.
 
@@ -1399,7 +1519,7 @@ Johnson Church of Christ AP System
 @app.route("/login", methods=["GET", "POST"])
 def login():
     if session.get("user_id"):
-        return redirect(url_for("index"))
+        return redirect(safe_next_url(request.args.get("next")))
 
     error = None
     if request.method == "POST":
@@ -1419,10 +1539,7 @@ def login():
             session["display_name"] = f"{row['first_name']} {row['last_name']}"
             session["role"] = row["role"] if "role" in row.keys() and row["role"] else ROLE_USER
             session.permanent = bool(remember)
-            next_url = request.args.get("next") or request.form.get("next") or url_for("index")
-            # Prevent open redirect
-            if not next_url.startswith("/"):
-                next_url = url_for("index")
+            next_url = safe_next_url(request.args.get("next") or request.form.get("next"))
             return redirect(next_url)
 
         error = "Invalid username or password."
@@ -1551,6 +1668,66 @@ def index():
             "email": u.get("email") or "",
         },
     )
+
+
+@app.route("/requests/<int:req_id>")
+def open_request(req_id):
+    """Deep link into the app on a specific request (sign-in required)."""
+    me = current_user()
+    req = get_request(req_id)
+    if not req:
+        abort(404)
+    if not user_can_view_request(me, req):
+        abort(403)
+    return redirect(url_for("index", req=req_id))
+
+
+@app.route("/view/<token>")
+def view_request_email(token):
+    """Public request view from an approval email. Does not consume the token."""
+    data = lookup_pending_token(token)
+    if not data:
+        return (
+            "<html><body style='font-family:sans-serif;padding:2rem;max-width:520px;margin:auto;'>"
+            "<h2>This view link is invalid or has already been used.</h2>"
+            "<p>If the request was already approved or rejected, sign in to the AP system to open it.</p>"
+            "<p><a href='/'>Return to AP System</a></p>"
+            "</body></html>"
+        ), 410
+
+    req = get_request(data["request_id"])
+    if not req:
+        abort(404)
+
+    ctx = build_print_context(req)
+    ctx["autoprint"] = False
+    ctx["token"] = token
+    ctx["approve_url"] = url_for("approve_link", token=token)
+    ctx["reject_url"] = url_for("reject_link", token=token)
+    ctx["app_url"] = url_for("open_request", req_id=req["id"])
+    for att in ctx["attachments"]:
+        att["inline_url"] = url_for(
+            "view_request_email_attachment", token=token, att_id=att["id"], inline=1
+        )
+        att["download_url"] = url_for(
+            "view_request_email_attachment", token=token, att_id=att["id"], download=1
+        )
+    return render_template("view_request.html", **ctx)
+
+
+@app.route("/view/<token>/attachments/<int:att_id>")
+def view_request_email_attachment(token, att_id):
+    """Serve an attachment to someone holding a valid approval-view token."""
+    data = lookup_pending_token(token)
+    if not data:
+        abort(403)
+    db = get_db()
+    cur = db.cursor()
+    cur.execute("SELECT * FROM request_attachments WHERE id=?", (att_id,))
+    att = cur.fetchone()
+    if not att or att["request_id"] != data["request_id"]:
+        abort(404)
+    return send_attachment_response(att)
 
 
 @app.route("/requests/<int:req_id>/print")
@@ -2335,16 +2512,7 @@ def api_attachment(att_id):
         db.commit()
         return "", 204
 
-    path = os.path.join(UPLOAD_FOLDER, att["stored_filename"])
-    if not os.path.isfile(path):
-        return jsonify({"error": "File missing on server"}), 404
-    inline = request.args.get("inline", "").lower() in ("1", "true", "yes")
-    return send_file(
-        path,
-        mimetype=att["content_type"] or "application/octet-stream",
-        as_attachment=not inline,
-        download_name=att["original_filename"],
-    )
+    return send_attachment_response(att)
 
 
 @app.route("/api/requests/<int:req_id>/manual_action", methods=["POST"])
