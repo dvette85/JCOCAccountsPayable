@@ -12,7 +12,7 @@ import uuid
 from datetime import datetime, date, timedelta
 from functools import wraps
 from html import escape as html_escape
-from flask import Flask, request, jsonify, render_template, redirect, url_for, send_file, g, session, abort
+from flask import Flask, request, jsonify, render_template, redirect, url_for, send_file, g, session, abort, make_response
 import io
 import csv
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -420,6 +420,7 @@ def init_db():
         "ALTER TABLE users ADD COLUMN password_hash TEXT",
         "ALTER TABLE users ADD COLUMN role TEXT DEFAULT 'User'",
         "ALTER TABLE requests ADD COLUMN notify_user_id INTEGER",
+        "ALTER TABLE pending_approvals ADD COLUMN used_at TEXT",
     ):
         try:
             cur.execute(col_sql)
@@ -524,6 +525,7 @@ def init_db():
             approver_id INTEGER NOT NULL,
             token TEXT UNIQUE NOT NULL,
             created_at TEXT DEFAULT (datetime('now')),
+            used_at TEXT,
             FOREIGN KEY(request_id) REFERENCES requests(id),
             FOREIGN KEY(approver_id) REFERENCES users(id)
         )
@@ -839,7 +841,7 @@ def log_email(to_email, subject, body, status="simulated"):
 def public_base_url():
     """Public origin used in emails and token links."""
     if BASE_URL:
-        return BASE_URL.rstrip("/")
+        return str(BASE_URL).strip().rstrip("/")
     try:
         return request.host_url.rstrip("/")
     except RuntimeError:
@@ -947,7 +949,8 @@ Review this request (opens the request, including any attachments):
 Or sign in to the AP system:
 {app_url}
 
-Please click one of the links below:
+Please click one of the links below. You will be asked to confirm on the next
+page so the request is not approved or rejected by an email security scan.
 
 APPROVE: {approve_url}
 REJECT:  {reject_url}
@@ -989,6 +992,7 @@ Johnson Church of Christ - Accounts Payable System
     <a href="{html_escape(approve_url)}" style="background:#16a34a;color:white;padding:12px 20px;text-decoration:none;border-radius:6px;font-weight:600;margin-right:12px;display:inline-block;">✓ APPROVE</a>
     <a href="{html_escape(reject_url)}" style="background:#dc2626;color:white;padding:12px 20px;text-decoration:none;border-radius:6px;font-weight:600;display:inline-block;">✕ REJECT</a>
   </p>
+  <p style="color:#555;font-size:0.9em;">You will be asked to confirm on the next page. This keeps email security scanners from using the link by accident.</p>
 
   <p style="color:#555;font-size:0.9em;">If approved, this request will be routed to the next approver{(' (' + next_note + ')') if next_note else ''}.</p>
   <p style="color:#555;font-size:0.85em;"><a href="{html_escape(app_url)}">Open in the AP system</a> (sign-in required)</p>
@@ -997,13 +1001,27 @@ Johnson Church of Christ - Accounts Payable System
 
     return subject, text, html
 
+_APPROVAL_TOKEN_RE = re.compile(
+    r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
+)
+
+
+def normalize_approval_token(token):
+    """Strip wrapping punctuation and pull a UUID out of a messy path/query."""
+    if not token:
+        return ""
+    raw = str(token).strip().strip(".,;>)\"'")
+    match = _APPROVAL_TOKEN_RE.search(raw)
+    return (match.group(0) if match else raw).lower()
+
+
 def create_or_get_token(request_id, step, approver_id):
     db = get_db()
     cur = db.cursor()
-    # Check if existing pending token for this exact step
+    # Reuse an unused pending token for this exact step
     cur.execute("""
-        SELECT token FROM pending_approvals 
-        WHERE request_id=? AND step=? AND approver_id=?
+        SELECT token FROM pending_approvals
+        WHERE request_id=? AND step=? AND approver_id=? AND used_at IS NULL
     """, (request_id, step, approver_id))
     row = cur.fetchone()
     if row:
@@ -1017,31 +1035,68 @@ def create_or_get_token(request_id, step, approver_id):
     db.commit()
     return token
 
-def lookup_pending_token(token):
+def lookup_pending_token(token, unused_only=True):
     """Return pending approval row for a token without consuming it."""
+    token = normalize_approval_token(token)
     if not token:
         return None
     db = get_db()
     cur = db.cursor()
     cur.execute(
-        "SELECT request_id, step, approver_id, token FROM pending_approvals WHERE token=?",
+        "SELECT request_id, step, approver_id, token, used_at FROM pending_approvals WHERE lower(token)=?",
         (token,),
     )
     row = cur.fetchone()
-    return dict_from_row(row) if row else None
+    if not row:
+        return None
+    data = dict_from_row(row)
+    if unused_only and data.get("used_at"):
+        return None
+    return data
 
 
 def consume_token(token):
-    """Return (request_id, step, approver_id) or None. Deletes the token."""
+    """Mark a token used and return its row, or None if missing/already used."""
+    token = normalize_approval_token(token)
+    if not token:
+        return None
     db = get_db()
     cur = db.cursor()
-    cur.execute("SELECT request_id, step, approver_id FROM pending_approvals WHERE token=?", (token,))
-    row = cur.fetchone()
-    if not row:
+    cur.execute(
+        """UPDATE pending_approvals
+           SET used_at=datetime('now')
+           WHERE lower(token)=? AND used_at IS NULL""",
+        (token,),
+    )
+    if cur.rowcount != 1:
+        db.commit()
         return None
-    cur.execute("DELETE FROM pending_approvals WHERE token=?", (token,))
+    cur.execute(
+        "SELECT request_id, step, approver_id, token FROM pending_approvals WHERE lower(token)=?",
+        (token,),
+    )
+    row = cur.fetchone()
     db.commit()
-    return dict_from_row(row)
+    return dict_from_row(row) if row else None
+
+
+def mark_request_tokens_used(request_id, step=None):
+    """Invalidate unused email tokens for a request (optionally one step)."""
+    db = get_db()
+    cur = db.cursor()
+    if step is None:
+        cur.execute(
+            "UPDATE pending_approvals SET used_at=datetime('now') WHERE request_id=? AND used_at IS NULL",
+            (request_id,),
+        )
+    else:
+        cur.execute(
+            """UPDATE pending_approvals
+               SET used_at=datetime('now')
+               WHERE request_id=? AND step=? AND used_at IS NULL""",
+            (request_id, step),
+        )
+    db.commit()
 
 def get_user(user_id):
     if not user_id:
@@ -1522,6 +1577,7 @@ def advance_or_complete(request_id, approver_id, action="approved", notes=None):
         VALUES (?, ?, ?, ?, ?)
     """, (request_id, req["current_step"], approver_id, action, notes))
     db.commit()
+    mark_request_tokens_used(request_id, req["current_step"])
 
     if action == "rejected":
         cur.execute("""
@@ -1554,6 +1610,7 @@ Thank you,
 Johnson Church of Christ AP System
 """
             send_email(requester["email"], subject, body)
+        mark_request_tokens_used(request_id)
         return True, "Request rejected. Requester notified."
 
     # APPROVED - advance
@@ -1580,6 +1637,7 @@ Johnson Church of Christ AP System
         notify_extra = get_user(req.get("notify_user_id")) if req.get("notify_user_id") else None
         if notify_extra and (not requester or notify_extra["id"] != requester["id"]):
             send_approval_complete_notice(req, gl, notify_extra)
+        mark_request_tokens_used(request_id)
         return True, "Request fully approved!"
 
     # Route to next
@@ -1661,7 +1719,7 @@ def forgot_password():
                 )
                 db.commit()
                 if BASE_URL:
-                    base = BASE_URL.rstrip("/")
+                    base = str(BASE_URL).strip().rstrip("/")
                 else:
                     base = request.host_url.rstrip("/")
                 reset_url = f"{base}/reset-password/{token}"
@@ -1768,7 +1826,7 @@ def open_request(req_id):
 @app.route("/view/<token>")
 def view_request_email(token):
     """Public request view from an approval email. Does not consume the token."""
-    data = lookup_pending_token(token)
+    data = lookup_pending_token(token, unused_only=False)
     if not data:
         return (
             "<html><body style='font-family:sans-serif;padding:2rem;max-width:520px;margin:auto;'>"
@@ -1782,12 +1840,18 @@ def view_request_email(token):
     if not req:
         abort(404)
 
+    token = data["token"]
     ctx = build_print_context(req)
     ctx["autoprint"] = False
     ctx["token"] = token
     ctx["approve_url"] = url_for("approve_link", token=token)
     ctx["reject_url"] = url_for("reject_link", token=token)
     ctx["app_url"] = url_for("open_request", req_id=req["id"])
+    ctx["can_act"] = (
+        req.get("status") == "Pending"
+        and not data.get("used_at")
+        and (req.get("current_step") or 1) == data["step"]
+    )
     for att in ctx["attachments"]:
         att["inline_url"] = url_for(
             "view_request_email_attachment", token=token, att_id=att["id"], inline=1
@@ -1801,7 +1865,7 @@ def view_request_email(token):
 @app.route("/view/<token>/attachments/<int:att_id>")
 def view_request_email_attachment(token, att_id):
     """Serve an attachment to someone holding a valid approval-view token."""
-    data = lookup_pending_token(token)
+    data = lookup_pending_token(token, unused_only=False)
     if not data:
         abort(403)
     db = get_db()
@@ -1857,39 +1921,142 @@ def api_change_password():
     return jsonify({"success": True, "message": "Password changed"})
 
 
-@app.route("/approve/<token>")
+def _email_action_req_summary(req, step=None):
+    if not req:
+        return None
+    return {
+        "id": req.get("id"),
+        "vendor": req.get("vendor") or "",
+        "amount_display": format_money(req.get("amount")),
+        "step_label": APPROVER_STEP_LABELS.get(step, f"Step {step}") if step else None,
+    }
+
+
+def _email_action_response(status, **ctx):
+    html = render_template("email_action.html", **ctx)
+    resp = make_response(html, status)
+    resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
+    return resp
+
+
+def email_action_unavailable(token, action):
+    """Explain why an email approve/reject link cannot be used."""
+    noun = "approval" if action == "approved" else "reject"
+    data = lookup_pending_token(token, unused_only=False)
+    req = get_request(data["request_id"]) if data else None
+    heading = "This link cannot be used"
+    if req:
+        status = req.get("status") or ""
+        if status == "Approved":
+            heading = "Already approved"
+            message = f"This {noun} link was already used. Request #{req['id']} is fully approved."
+        elif status == "Rejected":
+            heading = "Already rejected"
+            message = f"This {noun} link was already used. Request #{req['id']} was rejected."
+        elif status == "Pending" and data and (req.get("current_step") or 1) != data.get("step"):
+            heading = "This step is complete"
+            message = (
+                f"Request #{req['id']} has already moved past this approval step "
+                "and is waiting on a later approver."
+            )
+        elif data and data.get("used_at"):
+            heading = "Link already used"
+            message = f"This {noun} link was already used. Request #{req['id']} is {status.lower()}."
+        else:
+            message = f"This {noun} link is no longer valid for request #{req['id']}."
+    else:
+        message = (
+            f"This {noun} link is invalid or was already used. "
+            "If you already confirmed, the request was recorded. "
+            "Otherwise sign in to the AP system to check its status."
+        )
+    return _email_action_response(
+        410,
+        title="Link unavailable",
+        heading=heading,
+        message=message,
+        mode="error",
+        action=action,
+        req=_email_action_req_summary(req, data.get("step") if data else None),
+        view_url=None,
+    )
+
+
+def handle_email_action(token, action):
+    """GET shows a confirm page (safe for email scanners). POST records the action."""
+    data = lookup_pending_token(token, unused_only=True)
+    if not data:
+        return email_action_unavailable(token, action)
+
+    req = get_request(data["request_id"])
+    if not req:
+        return email_action_unavailable(token, action)
+
+    current_step = req.get("current_step") or 1
+    if req.get("status") != "Pending" or current_step != data["step"]:
+        return email_action_unavailable(token, action)
+
+    summary = _email_action_req_summary(req, data["step"])
+    view_url = url_for("view_request_email", token=data["token"])
+    if request.method != "POST":
+        if action == "approved":
+            heading, message, title = (
+                "Confirm approval",
+                "Email security tools often open this link before you do. Confirm below to record your approval.",
+                "Confirm approval",
+            )
+        else:
+            heading, message, title = (
+                "Confirm rejection",
+                "Confirm below to reject this request. You can optionally include a reason for the requester.",
+                "Confirm rejection",
+            )
+        return _email_action_response(
+            200,
+            title=title,
+            heading=heading,
+            message=message,
+            mode="confirm",
+            action=action,
+            req=summary,
+            view_url=view_url,
+        )
+
+    notes = None
+    if action == "rejected":
+        notes = (request.form.get("notes") or "").strip() or "Rejected via email link"
+
+    consumed = consume_token(data["token"])
+    if not consumed:
+        return email_action_unavailable(token, action)
+
+    _ok, msg = advance_or_complete(
+        consumed["request_id"], consumed["approver_id"], action, notes
+    )
+    if action == "approved":
+        heading, title = "Approval recorded", "Approval recorded"
+    else:
+        heading, title = "Request rejected", "Request rejected"
+    return _email_action_response(
+        200,
+        title=title,
+        heading=heading,
+        message=msg,
+        mode="success",
+        action=action,
+        req=summary,
+        view_url=None,
+    )
+
+
+@app.route("/approve/<token>", methods=["GET", "POST"])
 def approve_link(token):
-    data = consume_token(token)
-    if not data:
-        return "<h3>Invalid or already used approval link.</h3><p><a href='/'>Return to AP System</a></p>"
+    return handle_email_action(token, "approved")
 
-    ok, msg = advance_or_complete(data["request_id"], data["approver_id"], "approved")
-    return f"""
-    <html><body style="font-family:sans-serif;padding:2rem;max-width:520px;margin:auto;">
-      <h2 style="color:#166534;">Approval Recorded</h2>
-      <p>{msg}</p>
-      <p><a href="/" style="color:#1e40af;">← Back to Accounts Payable System</a></p>
-      <p style="color:#666;font-size:0.85em;">Request #{data['request_id']} • Step {data['step']}</p>
-    </body></html>
-    """
 
-@app.route("/reject/<token>")
+@app.route("/reject/<token>", methods=["GET", "POST"])
 def reject_link(token):
-    data = consume_token(token)
-    if not data:
-        return "<h3>Invalid or already used reject link.</h3><p><a href='/'>Return to AP System</a></p>"
-
-    # Ask for reason via simple form? For email button simplicity, just reject with default.
-    # For better UX we could redirect to form, but for one-click: direct reject.
-    ok, msg = advance_or_complete(data["request_id"], data["approver_id"], "rejected", "Rejected via email link")
-    return f"""
-    <html><body style="font-family:sans-serif;padding:2rem;max-width:520px;margin:auto;">
-      <h2 style="color:#991b1b;">Request Rejected</h2>
-      <p>{msg}</p>
-      <p><a href="/" style="color:#1e40af;">← Back to Accounts Payable System</a></p>
-      <p style="color:#666;font-size:0.85em;">Request #{data['request_id']} • Step {data['step']}</p>
-    </body></html>
-    """
+    return handle_email_action(token, "rejected")
 
 # ---------- API ROUTES ----------
 @app.route("/api/users", methods=["GET", "POST"])

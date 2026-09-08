@@ -128,14 +128,30 @@
     {% endif %}
 
     <section class="bg-white border border-slate-200 rounded-2xl shadow-sm p-5">
+      {% if can_act %}
       <div class="flex flex-col sm:flex-row gap-3">
-        <a href="{{ approve_url }}" class="flex-1 text-center px-4 py-3 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white font-semibold">
-          <i class="fa-solid fa-check mr-1.5"></i> Approve
-        </a>
-        <a href="{{ reject_url }}" class="flex-1 text-center px-4 py-3 rounded-xl bg-red-600 hover:bg-red-700 text-white font-semibold">
-          <i class="fa-solid fa-xmark mr-1.5"></i> Reject
-        </a>
+        <form method="POST" action="{{ approve_url }}" class="flex-1">
+          <button type="submit" class="w-full text-center px-4 py-3 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white font-semibold">
+            <i class="fa-solid fa-check mr-1.5"></i> Approve
+          </button>
+        </form>
+        <form method="POST" action="{{ reject_url }}" class="flex-1">
+          <button type="submit" class="w-full text-center px-4 py-3 rounded-xl bg-red-600 hover:bg-red-700 text-white font-semibold">
+            <i class="fa-solid fa-xmark mr-1.5"></i> Reject
+          </button>
+        </form>
       </div>
+      {% else %}
+      <p class="text-sm text-slate-600 text-center">
+        {% if status == "Approved" %}
+          This request has already been fully approved.
+        {% elif status == "Rejected" %}
+          This request was rejected.
+        {% else %}
+          This email link is no longer the active approval step. Sign in to the AP system to view the current status.
+        {% endif %}
+      </p>
+      {% endif %}
       <p class="text-xs text-slate-500 mt-3 text-center">
         <a href="{{ app_url }}" class="text-blue-700 hover:underline">Open in the AP system</a> (sign-in required)
       </p>

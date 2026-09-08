@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <title>{{ title }} • Johnson Church of Christ</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+    body {
+      font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+      -webkit-font-smoothing: antialiased;
+      background: linear-gradient(160deg, #eff6ff 0%, #f8fafc 45%, #f1f5f9 100%);
+    }
+  </style>
+</head>
+<body class="min-h-screen text-slate-800">
+  <main class="max-w-lg mx-auto px-4 py-10">
+    <div class="text-center mb-6">
+      <div class="text-xs uppercase tracking-widest text-blue-700 font-semibold">Johnson Church of Christ</div>
+      <div class="text-sm text-slate-500 mt-0.5">Accounts Payable</div>
+    </div>
+
+    <div class="bg-white border border-slate-200 rounded-2xl shadow-sm p-6 sm:p-8">
+      <div class="flex items-start gap-3 mb-4">
+        {% if mode == 'success' and action == 'approved' %}
+          <span class="inline-flex w-10 h-10 rounded-xl bg-emerald-100 text-emerald-800 items-center justify-center shrink-0"><i class="fa-solid fa-check"></i></span>
+        {% elif mode == 'success' %}
+          <span class="inline-flex w-10 h-10 rounded-xl bg-red-100 text-red-800 items-center justify-center shrink-0"><i class="fa-solid fa-xmark"></i></span>
+        {% elif mode == 'confirm' and action == 'approved' %}
+          <span class="inline-flex w-10 h-10 rounded-xl bg-emerald-100 text-emerald-800 items-center justify-center shrink-0"><i class="fa-solid fa-check"></i></span>
+        {% elif mode == 'confirm' %}
+          <span class="inline-flex w-10 h-10 rounded-xl bg-red-100 text-red-800 items-center justify-center shrink-0"><i class="fa-solid fa-xmark"></i></span>
+        {% else %}
+          <span class="inline-flex w-10 h-10 rounded-xl bg-amber-100 text-amber-800 items-center justify-center shrink-0"><i class="fa-solid fa-circle-exclamation"></i></span>
+        {% endif %}
+        <div>
+          <h1 class="text-xl font-semibold text-slate-900">{{ heading }}</h1>
+          <p class="text-sm text-slate-600 mt-1">{{ message }}</p>
+        </div>
+      </div>
+
+      {% if req %}
+      <dl class="mt-4 mb-5 rounded-xl border border-slate-100 bg-slate-50 divide-y divide-slate-100 text-sm">
+        <div class="flex justify-between gap-4 px-4 py-2.5">
+          <dt class="text-slate-500">Request</dt>
+          <dd class="font-medium">#{{ req.id }}</dd>
+        </div>
+        <div class="flex justify-between gap-4 px-4 py-2.5">
+          <dt class="text-slate-500">Vendor / Payee</dt>
+          <dd class="font-medium text-right">{{ req.vendor }}</dd>
+        </div>
+        <div class="flex justify-between gap-4 px-4 py-2.5">
+          <dt class="text-slate-500">Amount</dt>
+          <dd class="font-semibold tabular-nums">{{ req.amount_display }}</dd>
+        </div>
+        {% if req.step_label %}
+        <div class="flex justify-between gap-4 px-4 py-2.5">
+          <dt class="text-slate-500">Your step</dt>
+          <dd>{{ req.step_label }}</dd>
+        </div>
+        {% endif %}
+      </dl>
+      {% endif %}
+
+      {% if mode == 'confirm' %}
+        <form method="POST" class="space-y-4">
+          {% if action == 'rejected' %}
+          <div>
+            <label for="notes" class="block text-xs font-semibold text-slate-600 mb-1">Reason (optional)</label>
+            <textarea id="notes" name="notes" rows="3"
+              class="w-full border border-slate-300 rounded-xl px-3.5 py-2.5 text-sm focus:outline-none focus:border-blue-600 focus:ring-2 focus:ring-blue-100"
+              placeholder="Let the requester know what to fix"></textarea>
+          </div>
+          <button type="submit" class="w-full py-3 rounded-xl bg-red-600 hover:bg-red-700 text-white font-semibold">
+            Confirm rejection
+          </button>
+          {% else %}
+          <button type="submit" class="w-full py-3 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white font-semibold">
+            Confirm approval
+          </button>
+          {% endif %}
+        </form>
+        {% if view_url %}
+        <p class="text-center text-xs text-slate-500 mt-4">
+          <a href="{{ view_url }}" class="text-blue-700 hover:underline">Review the request first</a>
+        </p>
+        {% endif %}
+      {% else %}
+        <p class="text-sm">
+          <a href="/" class="text-blue-700 hover:underline">← Back to Accounts Payable System</a>
+        </p>
+      {% endif %}
+    </div>
+  </main>
+</body>
+</html>
