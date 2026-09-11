@@ -709,6 +709,10 @@
             <button type="button" onclick="openContributorModal()" class="px-4 py-2 bg-blue-800 text-white text-sm font-semibold rounded-xl">
               <i class="fa-solid fa-user-plus mr-1"></i> Add contributor
             </button>
+            <label class="px-4 py-2 bg-white border border-slate-300 text-sm font-semibold rounded-xl cursor-pointer">
+              <i class="fa-solid fa-file-import mr-1 text-blue-800"></i> Upload addresses
+              <input type="file" id="contributor-address-file" class="hidden" accept=".csv,.xlsx,.txt" onchange="importContributorAddresses(this)">
+            </label>
             <label class="inline-flex items-center gap-2 px-3 py-2 bg-white border border-slate-300 text-sm font-semibold rounded-xl cursor-pointer select-none">
               <input type="checkbox" id="contributor-select-all" class="w-4 h-4 accent-blue-700" onchange="toggleSelectAllContributors(this.checked)">
               Select all
@@ -720,6 +724,7 @@
             <span id="contributor-selected-count" class="text-xs text-slate-500"></span>
           </div>
         </div>
+        <p class="text-xs text-slate-500 mb-3">Upload a Breeze people export (or a sheet with First Name, Last Name, Street Address, City, State, Zip). Existing contributors are matched by name, including nicknames and household names like “Jim &amp; Tawn”. Unmatched adults with an address are added; children are not.</p>
         <div class="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-sm">
           <div class="overflow-x-auto">
             <table class="w-full text-sm">
@@ -2532,6 +2537,48 @@
         });
         if (cur) sel.value = cur;
       });
+    }
+
+    async function importContributorAddresses(input) {
+      if (!input || !input.files || !input.files[0]) return;
+      if (!IS_ADMIN) {
+        alert('Only administrators can import contributor addresses.');
+        input.value = '';
+        return;
+      }
+      const file = input.files[0];
+      const name = (file.name || '').toLowerCase();
+      if (!name.endsWith('.csv') && !name.endsWith('.xlsx') && !name.endsWith('.txt')) {
+        alert('Please upload a .csv or .xlsx file.');
+        input.value = '';
+        return;
+      }
+      if (!confirm('Update contributor addresses from \"' + file.name + '\"?\n\n• Existing people are matched by name (nicknames and household names included)\n• Addresses from the file replace blank or older addresses on matches\n• Unmatched adults with an address are added\n• Children and rows with no address are skipped')) {
+        input.value = '';
+        return;
+      }
+      const fd = new FormData();
+      fd.append('file', file);
+      fd.append('create_missing', '1');
+      try {
+        const res = await apiFetch('/api/contributors/import_addresses', { method: 'POST', body: fd });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          alert(data.error || 'Import failed');
+          input.value = '';
+          return;
+        }
+        await loadContributors();
+        let msg = data.message || 'Import complete.';
+        const extra = [];
+        if (data.ambiguous && data.ambiguous.length) extra.push('Ambiguous: ' + data.ambiguous.join(', '));
+        if (data.unmatched && data.unmatched.length) extra.push('Not added: ' + data.unmatched.slice(0, 8).join(', '));
+        if (extra.length) msg += '\n\n' + extra.join('\n');
+        alert(msg);
+      } catch (e) {
+        alert('Import error: ' + e.message);
+      }
+      input.value = '';
     }
 
     async function loadContributorOptions() {

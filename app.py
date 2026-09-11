@@ -3043,6 +3043,278 @@ def find_contributor_by_name(name):
     return dict_from_row(row) if row else None
 
 
+# Common English nicknames used when matching Breeze/people exports to contributors.
+_NAME_NICKNAMES = {
+    "abigail": {"abi", "abby", "abbie"},
+    "alexander": {"alex"},
+    "andrew": {"andy", "drew"},
+    "anthony": {"tony"},
+    "barbara": {"barb", "barbie"},
+    "benjamin": {"ben", "benny"},
+    "charles": {"chuck", "charlie", "chas"},
+    "christopher": {"chris"},
+    "daniel": {"dan", "danny"},
+    "david": {"dave", "davey"},
+    "deborah": {"debbie", "deb"},
+    "donald": {"don", "donnie"},
+    "edward": {"ed", "eddie", "ted"},
+    "elizabeth": {"liz", "lizzy", "beth", "betsy", "betty"},
+    "emerson": {"emmy"},
+    "gregory": {"greg"},
+    "grace": {"gracie"},
+    "james": {"jim", "jimmy", "jamie"},
+    "jennifer": {"jen", "jenny"},
+    "john": {"jack", "johnny"},
+    "jonathan": {"jon"},
+    "joseph": {"joe", "joey"},
+    "joshua": {"josh"},
+    "kenneth": {"ken", "kenny"},
+    "lawrence": {"larry"},
+    "margaret": {"meg", "maggie", "peggy", "marge"},
+    "matthew": {"matt"},
+    "mckenzi": {"kenzi", "kenzie", "mckenzie"},
+    "michael": {"mike", "mikey"},
+    "nicholas": {"nick"},
+    "pamela": {"pam"},
+    "patricia": {"pat", "patty", "trish", "trisha"},
+    "philip": {"phil"},
+    "phillip": {"phil"},
+    "randall": {"randy"},
+    "raymond": {"ray"},
+    "richard": {"rick", "ricky", "dick", "rich"},
+    "robert": {"bob", "bobby", "rob", "robbie"},
+    "ronald": {"ron", "ronnie"},
+    "samuel": {"sam"},
+    "stephanie": {"steph", "stef"},
+    "steven": {"steve"},
+    "stephen": {"steve"},
+    "susan": {"sue", "suzy", "susie"},
+    "theodore": {"ted", "theo"},
+    "thomas": {"tom", "tommy"},
+    "timothy": {"tim", "timmy"},
+    "william": {"will", "bill", "billy", "willy"},
+}
+for _canon, _nicks in list(_NAME_NICKNAMES.items()):
+    _NAME_NICKNAMES[_canon] = set(_nicks) | {_canon}
+    for _n in list(_nicks):
+        _NAME_NICKNAMES.setdefault(_n, set()).update({_canon, _n, *_nicks})
+
+
+def _fold_name(value):
+    return re.sub(r"[^a-z0-9]", "", (value or "").lower())
+
+
+def _name_words(value):
+    text = (value or "").replace("&", " and ").replace("/", " ")
+    text = re.sub(r"[.'’]", "", text.lower())
+    text = re.sub(r"\b(jr|sr|ii|iii|iv|phd|md)\.?$", "", text.strip())
+    text = re.sub(r"[^a-z0-9]+", " ", text)
+    skip = {"and", "or", "the", "family", "household", "mr", "mrs", "ms", "miss", "dr"}
+    return [w for w in text.split() if w and w not in skip]
+
+
+def _first_name_keys(first, nickname=None):
+    keys = set()
+    for word in _name_words(first) + _name_words(nickname):
+        keys.add(word)
+        keys.update(_NAME_NICKNAMES.get(word, {word}))
+        if "-" in (first or ""):
+            keys.add(_fold_name(word))
+    folded = _fold_name(first)
+    if folded:
+        keys.add(folded)
+    nick_fold = _fold_name(nickname)
+    if nick_fold:
+        keys.add(nick_fold)
+        keys.update(_NAME_NICKNAMES.get(nickname.lower().strip(), set()))
+    return {k for k in keys if k}
+
+
+def _last_name_keys(last):
+    words = _name_words(last)
+    keys = set(words)
+    folded = _fold_name(last)
+    if folded:
+        keys.add(folded)
+    if len(words) >= 2:
+        keys.add("".join(words))
+    return {k for k in keys if k}
+
+
+def _split_household_first_names(first):
+    text = (first or "").replace("&", " and ")
+    if " and " in text.lower():
+        parts = re.split(r"\s+and\s+", text, flags=re.I)
+        return [p.strip() for p in parts if p.strip()]
+    return [(first or "").strip()] if (first or "").strip() else []
+
+
+def contributor_match_keys(person):
+    first = (person.get("first_name") or "").strip()
+    last = (person.get("last_name") or "").strip()
+    first_keys = set()
+    for part in _split_household_first_names(first):
+        first_keys.update(_first_name_keys(part))
+    if not first_keys:
+        first_keys.update(_first_name_keys(first))
+    return {
+        "id": person.get("id"),
+        "first": first,
+        "last": last,
+        "first_keys": first_keys,
+        "last_keys": _last_name_keys(last),
+        "fold": _fold_name(f"{first} {last}"),
+    }
+
+
+def score_person_match(file_person, contrib_keys):
+    """Return a match score, or 0 if this should not be linked."""
+    last_keys = file_person["last_keys"]
+    if not last_keys or not contrib_keys["last_keys"]:
+        return 0
+    if last_keys.isdisjoint(contrib_keys["last_keys"]):
+        return 0
+    file_first = file_person["first_keys"]
+    contrib_first = contrib_keys["first_keys"]
+    if file_person["fold"] and file_person["fold"] == contrib_keys["fold"]:
+        return 100
+    if file_first and contrib_first and file_first.isdisjoint(contrib_first):
+        return 0
+    if not file_first or not contrib_first:
+        return 0
+    overlap = file_first & contrib_first
+    if not overlap:
+        return 0
+    file_last_fold = _fold_name(file_person.get("last") or "")
+    contrib_last_fold = _fold_name(contrib_keys.get("last") or "")
+    if file_last_fold and file_last_fold == contrib_last_fold:
+        file_first_fold = _fold_name(file_person.get("first") or "")
+        contrib_first_fold = _fold_name(contrib_keys.get("first") or "")
+        if file_first_fold and file_first_fold == contrib_first_fold:
+            return 100
+        return 90
+    return 80
+
+
+def match_file_person_to_contributor(file_person, contrib_index):
+    scored = []
+    for item in contrib_index:
+        score = score_person_match(file_person, item)
+        if score:
+            scored.append((score, item))
+    if not scored:
+        return None, 0, "unmatched"
+    scored.sort(key=lambda x: (-x[0], x[1]["last"], x[1]["first"]))
+    best_score, best = scored[0]
+    ties = [item for score, item in scored if score == best_score and item["id"] != best["id"]]
+    if ties and best_score < 100:
+        return None, best_score, "ambiguous"
+    return best, best_score, "matched"
+
+
+def parse_people_address_rows(rows):
+    """Parse a Breeze/people export or a simple name+address spreadsheet."""
+    if not rows:
+        return [], "File is empty"
+
+    def norm(h):
+        return re.sub(r"[^a-z0-9]+", "", (str(h) if h is not None else "").strip().lower())
+
+    header_idx = None
+    colmap = {}
+    aliases = {
+        "first": ("firstname", "first", "fname", "givenname"),
+        "last": ("lastname", "last", "lname", "surname"),
+        "name": ("name", "fullname", "contributor", "contributorname"),
+        "nickname": ("nickname", "nick", "preferredname"),
+        "address1": ("streetaddress", "address", "address1", "addressline1", "street", "addr1"),
+        "address2": ("address2", "addressline2", "apt", "suite", "addr2"),
+        "city": ("city", "town"),
+        "state": ("state", "st", "province"),
+        "zip": ("zip", "zipcode", "postal", "postalcode"),
+        "role": ("familyrole", "role", "householdrole"),
+    }
+    for i, row in enumerate(rows[:15]):
+        headers = [norm(x) for x in row]
+        found = {}
+        for key, names in aliases.items():
+            for col, h in enumerate(headers):
+                if h in names:
+                    found[key] = col
+                    break
+        if ("first" in found and "last" in found) or "name" in found:
+            if any(k in found for k in ("address1", "city", "zip")):
+                header_idx = i
+                colmap = found
+                break
+    if header_idx is None:
+        return [], "File must include First Name, Last Name, and address columns (Breeze people export is supported)"
+
+    people = []
+    for n, row in enumerate(rows[header_idx + 1 :], start=header_idx + 2):
+        if not row or not any(str(c).strip() for c in row if c is not None):
+            continue
+
+        def cell(key):
+            i = colmap.get(key)
+            if i is None or i >= len(row):
+                return ""
+            v = row[i]
+            return str(v).strip() if v is not None else ""
+
+        first = cell("first")
+        last = cell("last")
+        if not first and not last:
+            raw_name = cell("name")
+            if "," in raw_name:
+                last, first = [p.strip() for p in raw_name.split(",", 1)]
+            else:
+                bits = raw_name.split()
+                first, last = (bits[0], " ".join(bits[1:])) if len(bits) >= 2 else (raw_name, "")
+        if _fold_name(first) == "unassigned" or _fold_name(last) == "unassigned":
+            continue
+        if not first or not last:
+            continue
+        street = cell("address1")
+        addr2 = cell("address2")
+        city = cell("city")
+        state = cell("state")
+        zipc = cell("zip")
+        if state and len(state) <= 2:
+            state = state.upper()
+        role = cell("role")
+        people.append({
+            "row": n,
+            "first": first,
+            "last": last,
+            "nickname": cell("nickname"),
+            "address_line1": street,
+            "address_line2": addr2,
+            "city": city,
+            "state": state,
+            "zip": zipc,
+            "role": role,
+            "first_keys": _first_name_keys(first, cell("nickname")),
+            "last_keys": _last_name_keys(last),
+            "fold": _fold_name(f"{first} {last}"),
+            "has_address": bool(street or city or zipc),
+        })
+    return people, None
+
+
+def _role_import_rank(role):
+    value = (role or "").strip().lower()
+    order = {
+        "head of household": 0,
+        "spouse": 1,
+        "adult": 2,
+        "unassigned": 3,
+        "": 4,
+        "child": 9,
+    }
+    return order.get(value, 5)
+
+
 def get_letter_template_body():
     ensure_letter_template()
     db = get_db()
@@ -3411,6 +3683,129 @@ def api_contributors():
     )
     db.commit()
     return jsonify(serialize_contributor(get_contributor(cur.lastrowid))), 201
+
+
+@app.route("/api/contributors/import_addresses", methods=["POST"])
+def api_contributors_import_addresses():
+    """Match a Breeze/people export to contributors and fill in addresses."""
+    denied = require_admin_api()
+    if denied:
+        return denied
+    if "file" not in request.files:
+        return jsonify({"error": "No file provided"}), 400
+    f = request.files["file"]
+    if not f or not f.filename:
+        return jsonify({"error": "No file selected"}), 400
+    name = f.filename.lower()
+    rows = []
+    try:
+        if name.endswith(".xlsx"):
+            if not openpyxl:
+                return jsonify({"error": "Excel import requires openpyxl"}), 400
+            wb = openpyxl.load_workbook(f, data_only=True)
+            ws = wb.active
+            rows = [[c if c is not None else "" for c in row] for row in ws.iter_rows(values_only=True)]
+        else:
+            text = f.read().decode("utf-8-sig")
+            rows = list(csv.reader(io.StringIO(text)))
+    except Exception as e:
+        return jsonify({"error": f"Could not read file: {e}"}), 400
+
+    people, err = parse_people_address_rows(rows)
+    if err:
+        return jsonify({"error": err}), 400
+
+    create_missing = str(request.form.get("create_missing") or "1").lower() in ("1", "true", "yes", "on")
+    db = get_db()
+    cur = db.cursor()
+    cur.execute("SELECT * FROM contributors")
+    existing = [dict_from_row(r) for r in cur.fetchall()]
+    index = [contributor_match_keys(p) for p in existing]
+    existing_folds = {item["fold"] for item in index if item.get("fold")}
+
+    people.sort(key=lambda p: (_role_import_rank(p.get("role")), p["last"].lower(), p["first"].lower()))
+    updated = 0
+    created = 0
+    skipped_no_address = 0
+    unmatched = []
+    ambiguous = []
+    used_ids = set()
+
+    for person in people:
+        if not person["has_address"]:
+            skipped_no_address += 1
+            continue
+        match, _score, status = match_file_person_to_contributor(person, index)
+        if status == "ambiguous":
+            ambiguous.append(f"{person['first']} {person['last']}")
+            continue
+        if match:
+            if match["id"] in used_ids and _role_import_rank(person.get("role")) >= 9:
+                continue
+            cur.execute(
+                """
+                UPDATE contributors SET address_line1=?, address_line2=?, city=?, state=?, zip=?
+                WHERE id=?
+                """,
+                (
+                    person["address_line1"],
+                    person["address_line2"],
+                    person["city"],
+                    person["state"],
+                    person["zip"],
+                    match["id"],
+                ),
+            )
+            used_ids.add(match["id"])
+            updated += 1
+            continue
+        if not create_missing:
+            unmatched.append(f"{person['first']} {person['last']}")
+            continue
+        if _role_import_rank(person.get("role")) >= 9:
+            unmatched.append(f"{person['first']} {person['last']} (child, not added)")
+            continue
+        if person["fold"] in existing_folds:
+            unmatched.append(f"{person['first']} {person['last']}")
+            continue
+        cur.execute(
+            """
+            INSERT INTO contributors (first_name, last_name, address_line1, address_line2, city, state, zip)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                person["first"], person["last"],
+                person["address_line1"], person["address_line2"],
+                person["city"], person["state"], person["zip"],
+            ),
+        )
+        new_id = cur.lastrowid
+        created += 1
+        existing_folds.add(person["fold"])
+        index.append(contributor_match_keys({
+            "id": new_id,
+            "first_name": person["first"],
+            "last_name": person["last"],
+        }))
+
+    db.commit()
+    msg = f"Updated addresses for {updated} contributor(s)."
+    if created:
+        msg += f" Added {created} new contributor(s)."
+    if skipped_no_address:
+        msg += f" Skipped {skipped_no_address} with no address."
+    if ambiguous:
+        msg += f" {len(ambiguous)} name(s) were ambiguous and left unchanged."
+    return jsonify({
+        "message": msg,
+        "updated": updated,
+        "created": created,
+        "skipped_no_address": skipped_no_address,
+        "unmatched": unmatched[:30],
+        "ambiguous": ambiguous[:20],
+        "unmatched_count": len(unmatched),
+        "ambiguous_count": len(ambiguous),
+    })
 
 
 @app.route("/api/contributors/bulk_delete", methods=["POST"])
