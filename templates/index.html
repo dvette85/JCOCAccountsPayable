@@ -852,8 +852,15 @@
             <div class="flex items-end gap-2">
               <button type="button" onclick="runSummaryReport()" class="px-4 py-2 bg-blue-800 text-white text-sm font-semibold rounded-lg">Run report</button>
               <button type="button" onclick="printSummaryReport()" class="px-3 py-2 border border-slate-300 rounded-lg text-sm" title="Print summary"><i class="fa-solid fa-print"></i></button>
-              <button type="button" onclick="emailSummaryReport()" class="px-3 py-2 border border-slate-300 rounded-lg text-sm" title="Email this summary to darron.mitchell@hotmail.com"><i class="fa-solid fa-envelope"></i></button>
+              <button type="button" onclick="emailSummaryReport()" class="px-3 py-2 border border-slate-300 rounded-lg text-sm" title="Email this summary to the selected users"><i class="fa-solid fa-envelope"></i></button>
             </div>
+          </div>
+          <div class="mt-3">
+            <label class="block text-xs font-medium text-slate-500 mb-1">Email to</label>
+            <div id="summary-email-users" class="flex flex-wrap gap-x-4 gap-y-1.5 max-h-36 overflow-auto border border-slate-200 rounded-lg px-3 py-2 bg-white text-sm">
+              <span class="text-xs text-slate-400">Loading users…</span>
+            </div>
+            <div class="text-[10px] text-slate-400 mt-0.5">Check the users who should receive the summary. This list is remembered the next time you send.</div>
           </div>
         </div>
         <div id="summary-report-wrap" class="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-sm">
@@ -2532,7 +2539,7 @@
       if (name === 'contributors') loadContributors();
       if (name === 'entries') { loadContributorOptions().then(loadContributionEntries); loadContributionMemos(); }
       if (name === 'template') loadLetterTemplate();
-      if (name === 'summary') { applySummaryYearToDate(); runSummaryReport(); }
+      if (name === 'summary') { applySummaryYearToDate(); loadSummaryEmailRecipients(); runSummaryReport(); }
       if (name === 'letters') { loadContributorOptions(); syncLetterAmountFields(); }
     }
 
@@ -3017,17 +3024,62 @@
       if (memo) p.set('memo', memo);
       window.open('/contributions/summary/print?' + p.toString(), '_blank', 'noopener');
     }
+    async function loadSummaryEmailRecipients() {
+      if (!IS_ADMIN) return;
+      await loadUsers(true);
+      let ids = [];
+      try {
+        const res = await apiFetch('/api/contributions/reports/summary/recipients');
+        const data = await res.json().catch(() => ({}));
+        if (res.ok) ids = (data.user_ids || []).map(Number);
+      } catch (e) {
+        ids = [];
+      }
+      renderSummaryEmailUsers(ids);
+    }
+
+    function renderSummaryEmailUsers(selectedIds) {
+      const box = document.getElementById('summary-email-users');
+      if (!box) return;
+      const selected = new Set((selectedIds || []).map(Number));
+      const people = (USERS || []).filter(u => String(u.email || '').trim());
+      if (!people.length) {
+        box.innerHTML = '<span class="text-xs text-slate-400">No users with email addresses.</span>';
+        return;
+      }
+      box.innerHTML = people.map(u => {
+        const name = `${u.first_name || ''} ${u.last_name || ''}`.trim() || u.username;
+        const checked = selected.has(Number(u.id)) ? 'checked' : '';
+        return `<label class="inline-flex items-center gap-1.5 text-xs text-slate-700 cursor-pointer whitespace-nowrap">
+          <input type="checkbox" class="summary-email-user w-4 h-4 accent-blue-700" value="${u.id}" ${checked}>
+          <span class="font-medium">${escapeHtml(name)}</span>
+          <span class="text-slate-400">${escapeHtml(u.email)}</span>
+        </label>`;
+      }).join('');
+    }
+
+    function selectedSummaryEmailUserIds() {
+      return Array.from(document.querySelectorAll('.summary-email-user:checked'))
+        .map(el => parseInt(el.value, 10))
+        .filter(n => n > 0);
+    }
+
     async function emailSummaryReport() {
       const df = document.getElementById('summary-from').value;
       const dt = document.getElementById('summary-to').value;
       const memo = document.getElementById('summary-memo').value.trim();
-      const to = 'darron.mitchell@hotmail.com';
+      const ids = selectedSummaryEmailUserIds();
+      if (!ids.length) return alert('Check at least one user to email.');
+      const names = ids.map(id => {
+        const u = (USERS || []).find(x => Number(x.id) === id) || {};
+        return (`${u.first_name || ''} ${u.last_name || ''}`.trim() || u.email || ('user #' + id));
+      });
       const period = (df || dt) ? ((df || 'beginning') + ' through ' + (dt || 'present')) : 'all dates';
-      if (!confirm('Email this contribution summary (' + period + ') to ' + to + '?')) return;
+      if (!confirm('Email this contribution summary (' + period + ') to:\n\n' + names.join('\n'))) return;
       const res = await apiFetch('/api/contributions/reports/summary/email', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ date_from: df, date_to: dt, memo: memo, to_email: to })
+        body: JSON.stringify({ date_from: df, date_to: dt, memo: memo, user_ids: ids })
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) return alert(data.error || 'Could not send summary email');

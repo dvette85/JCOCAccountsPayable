@@ -593,8 +593,16 @@ def init_db():
         "CREATE INDEX IF NOT EXISTS idx_contrib_entries_contributor ON contribution_entries(contributor_id)"
     )
 
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS contribution_summary_recipients (
+            user_id INTEGER PRIMARY KEY,
+            FOREIGN KEY(user_id) REFERENCES users(id)
+        )
+    """)
+
     db.commit()
     ensure_letter_template()
+    ensure_summary_recipients()
 
 def seed_data():
     db = get_db()
@@ -3764,20 +3772,136 @@ def build_contribution_summary_email(data):
     return subject, text, html
 
 
-def send_contribution_summary_report(date_from, date_to, memo, to_email=None):
-    to_email = (to_email or CONTRIBUTION_SUMMARY_EMAIL_TO).strip()
-    if not _EMAIL_RE.match(to_email):
-        return False, "A valid recipient email is required."
+def parse_id_list(raw):
+    ids = []
+    if not isinstance(raw, list):
+        return ids
+    for value in raw:
+        try:
+            i = int(value)
+        except (TypeError, ValueError):
+            continue
+        if i > 0:
+            ids.append(i)
+    return list(dict.fromkeys(ids))
+
+
+def ensure_summary_recipients():
+    db = get_db()
+    cur = db.cursor()
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS contribution_summary_recipients (
+            user_id INTEGER PRIMARY KEY,
+            FOREIGN KEY(user_id) REFERENCES users(id)
+        )
+        """
+    )
+    cur.execute("SELECT COUNT(*) as c FROM contribution_summary_recipients")
+    if cur.fetchone()["c"] > 0:
+        db.commit()
+        return
+    cur.execute(
+        """
+        SELECT id FROM users
+        WHERE lower(trim(email)) = lower(?) OR lower(trim(username)) = lower(?)
+        ORDER BY id LIMIT 1
+        """,
+        (CONTRIBUTION_SUMMARY_EMAIL_TO, "Darron.Mitchell"),
+    )
+    row = cur.fetchone()
+    if row:
+        cur.execute(
+            "INSERT OR IGNORE INTO contribution_summary_recipients (user_id) VALUES (?)",
+            (row["id"],),
+        )
+    db.commit()
+
+
+def get_summary_recipient_ids():
+    ensure_summary_recipients()
+    db = get_db()
+    cur = db.cursor()
+    cur.execute("SELECT user_id FROM contribution_summary_recipients ORDER BY user_id")
+    return [int(r["user_id"]) for r in cur.fetchall()]
+
+
+def save_summary_recipient_ids(user_ids):
+    ensure_summary_recipients()
+    ids = parse_id_list(user_ids)
+    db = get_db()
+    cur = db.cursor()
+    cur.execute("DELETE FROM contribution_summary_recipients")
+    for uid in ids:
+        cur.execute("SELECT id FROM users WHERE id=?", (uid,))
+        if cur.fetchone():
+            cur.execute(
+                "INSERT OR IGNORE INTO contribution_summary_recipients (user_id) VALUES (?)",
+                (uid,),
+            )
+    db.commit()
+    return get_summary_recipient_ids()
+
+
+def emails_for_summary_users(user_ids):
+    emails = []
+    skipped = []
+    seen = set()
+    for uid in parse_id_list(user_ids):
+        user = get_user(uid)
+        if not user:
+            skipped.append(f"user #{uid}")
+            continue
+        name = user_full_name(user) or user.get("username") or f"user #{uid}"
+        email = (user.get("email") or "").strip()
+        if not _EMAIL_RE.match(email):
+            skipped.append(name)
+            continue
+        key = email.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        emails.append({"id": uid, "name": name, "email": email})
+    return emails, skipped
+
+
+def send_contribution_summary_report(date_from, date_to, memo, to_emails):
+    addresses = []
+    seen = set()
+    for raw in to_emails or []:
+        email = (raw or "").strip()
+        if not _EMAIL_RE.match(email):
+            continue
+        key = email.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        addresses.append(email)
+    if not addresses:
+        return False, "Select at least one user with an email address.", []
     data = summary_report_data(date_from, date_to, memo)
     if not data.get("rows"):
-        return False, "No contributions match these filters."
+        return False, "No contributions match these filters.", []
     subject, text, html = build_contribution_summary_email(data)
-    status = send_email(to_email, subject, text, html)
-    if status == "failed":
-        return False, "Email failed to send. Check the Email Log for details."
-    if status == "simulated":
-        return True, f"Summary email simulated to {to_email}. See the Email Log."
-    return True, f"Summary email sent to {to_email}."
+    sent, failed, simulated = [], [], []
+    for email in addresses:
+        status = send_email(email, subject, text, html)
+        if status == "failed":
+            failed.append(email)
+        elif status == "simulated":
+            simulated.append(email)
+        else:
+            sent.append(email)
+    if failed and not sent and not simulated:
+        return False, "Email failed to send. Check the Email Log for details.", failed
+    parts = []
+    if sent:
+        parts.append("sent to " + ", ".join(sent))
+    if simulated:
+        parts.append("simulated to " + ", ".join(simulated) + " (see Email Log)")
+    if failed:
+        parts.append("failed for " + ", ".join(failed))
+    return True, "Summary email " + "; ".join(parts) + ".", sent + simulated
 
 
 @app.route("/api/contributors", methods=["GET", "POST"])
@@ -4374,6 +4498,19 @@ def api_contribution_summary():
     return jsonify(summary_report_data(date_from, date_to, memo))
 
 
+@app.route("/api/contributions/reports/summary/recipients", methods=["GET", "PUT"])
+def api_contribution_summary_recipients():
+    denied = require_admin_api()
+    if denied:
+        return denied
+    if request.method == "PUT":
+        data = request.get_json(silent=True) or {}
+        ids = save_summary_recipient_ids(data.get("user_ids") or [])
+    else:
+        ids = get_summary_recipient_ids()
+    return jsonify({"user_ids": ids})
+
+
 @app.route("/api/contributions/reports/summary/email", methods=["POST"])
 def api_contribution_summary_email():
     denied = require_admin_api()
@@ -4383,11 +4520,26 @@ def api_contribution_summary_email():
     date_from = (data.get("date_from") or request.args.get("date_from") or "").strip()
     date_to = (data.get("date_to") or request.args.get("date_to") or "").strip()
     memo = (data.get("memo") or request.args.get("memo") or "").strip()
-    to_email = (data.get("to_email") or CONTRIBUTION_SUMMARY_EMAIL_TO).strip()
-    ok, message = send_contribution_summary_report(date_from, date_to, memo, to_email)
+    user_ids = parse_id_list(data.get("user_ids"))
+    if user_ids:
+        save_summary_recipient_ids(user_ids)
+    else:
+        user_ids = get_summary_recipient_ids()
+    recipients, skipped = emails_for_summary_users(user_ids)
+    ok, message, delivered = send_contribution_summary_report(
+        date_from, date_to, memo, [r["email"] for r in recipients]
+    )
+    if skipped:
+        message = (message.rstrip(".") + ". Skipped (no email): " + ", ".join(skipped) + ".")
     if not ok:
-        return jsonify({"error": message}), 400
-    return jsonify({"success": True, "message": message, "to_email": to_email})
+        return jsonify({"error": message, "skipped": skipped}), 400
+    return jsonify({
+        "success": True,
+        "message": message,
+        "to_emails": delivered,
+        "user_ids": user_ids,
+        "skipped": skipped,
+    })
 
 
 @app.route("/api/contributions/letters")
@@ -4481,6 +4633,7 @@ def bootstrap_db():
     ensure_user_passwords()
     ensure_user_roles()
     ensure_letter_template()
+    ensure_summary_recipients()
     migrate_contribution_dates()
     os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
