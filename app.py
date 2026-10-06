@@ -53,6 +53,10 @@ ROLE_ADMIN = "Administrator"
 ROLE_USER = "User"
 CONTRIBUTION_METHODS = ("Check", "Cash", "Breeze", "Other")
 DEFAULT_CONTRIBUTION_MEMO = "General Contribution"
+CONTRIBUTION_SUMMARY_EMAIL_TO = (
+    os.environ.get("CONTRIBUTION_SUMMARY_EMAIL_TO") or "darron.mitchell@hotmail.com"
+).strip()
+_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 DEFAULT_LETTER_TEMPLATE = """Johnson Church of Christ
 Johnson, Arkansas
 
@@ -3642,6 +3646,140 @@ def summary_report_data(date_from, date_to, memo):
     }
 
 
+def contribution_summary_period_label(data):
+    date_from = (data.get("date_from") or "").strip()
+    date_to = (data.get("date_to") or "").strip()
+    if date_from or date_to:
+        start = format_display_date(date_from) if date_from else "beginning"
+        end = format_display_date(date_to) if date_to else "present"
+        return f"{start} through {end}"
+    return "All dates"
+
+
+def build_contribution_summary_email(data):
+    """Plain-text and HTML bodies for the contribution summary table."""
+    methods = data.get("methods") or list(CONTRIBUTION_METHODS)
+    period = contribution_summary_period_label(data)
+    memo = (data.get("memo") or "").strip()
+    entry_count = int(data.get("entry_count") or 0)
+    date_count = int(data.get("date_count") or 0)
+    averages = data.get("averages") or {}
+    grand = data.get("grand_totals") or {}
+    rows = data.get("rows") or []
+
+    subject = f"Contribution Summary — {period}"
+    memo_line = f"Memo contains “{memo}”\n" if memo else ""
+    header = "Date".ljust(14) + "".join(m.rjust(12) for m in methods) + "Grand total".rjust(14)
+    avg_line = "Period avg".ljust(14) + "".join(
+        format_money_amount(averages.get(m, 0)).rjust(12) for m in methods
+    ) + format_money_amount(averages.get("Total", 0)).rjust(14)
+    body_lines = []
+    for row in rows:
+        label = (row.get("date_display") or row.get("date") or "")[:14].ljust(14)
+        body_lines.append(
+            label
+            + "".join(format_money_amount(row.get(m, 0)).rjust(12) for m in methods)
+            + format_money_amount(row.get("Total", 0)).rjust(14)
+        )
+    tot_line = "Grand total".ljust(14) + "".join(
+        format_money_amount(grand.get(m, 0)).rjust(12) for m in methods
+    ) + format_money_amount(grand.get("Total", 0)).rjust(14)
+    text = (
+        f"Johnson Church of Christ — Contribution Summary\n"
+        f"Period: {period}\n"
+        f"{memo_line}"
+        f"{entry_count} contribution(s) · {date_count} date(s)\n\n"
+        f"{header}\n"
+        f"{avg_line}\n"
+        + ("\n".join(body_lines) + "\n" if body_lines else "No matching contributions.\n")
+        + f"{tot_line}\n\n"
+        "Period average is the column total divided by the number of dates with contributions.\n"
+        "Johnson Church of Christ • Accounts Payable System\n"
+    )
+
+    def td_amt(value, extra=""):
+        return (
+            f'<td style="border:1px solid #cbd5e1;padding:6px 8px;text-align:right;'
+            f'font-variant-numeric:tabular-nums;{extra}">{html_escape(format_money_amount(value))}</td>'
+        )
+
+    def td_text(value, extra=""):
+        return (
+            f'<td style="border:1px solid #cbd5e1;padding:6px 8px;{extra}">'
+            f"{html_escape(str(value))}</td>"
+        )
+
+    th = "".join(
+        f'<th style="border:1px solid #1e3a8a;background:#1e3a8a;color:#fff;padding:6px 8px;'
+        f'text-align:right;font-size:12px;">{html_escape(m)}</th>'
+        for m in methods
+    )
+    th += (
+        '<th style="border:1px solid #1e3a8a;background:#1e3a8a;color:#fff;padding:6px 8px;'
+        'text-align:right;font-size:12px;">Grand total</th>'
+    )
+    avg_cells = "".join(td_amt(averages.get(m, 0), "font-weight:700;") for m in methods)
+    avg_cells += td_amt(averages.get("Total", 0), "font-weight:700;")
+    row_html = []
+    for row in rows:
+        cells = td_text(row.get("date_display") or row.get("date") or "")
+        cells += "".join(td_amt(row.get(m, 0)) for m in methods)
+        cells += td_amt(row.get("Total", 0), "font-weight:600;")
+        row_html.append(f"<tr>{cells}</tr>")
+    tot_cells = td_text("Grand total", "font-weight:700;")
+    tot_cells += "".join(td_amt(grand.get(m, 0), "font-weight:700;") for m in methods)
+    tot_cells += td_amt(grand.get("Total", 0), "font-weight:700;")
+    memo_html = (
+        f" · Memo contains “{html_escape(memo)}”" if memo else ""
+    )
+    html = f"""<!doctype html>
+<html><body style="font-family:system-ui,Segoe UI,Arial,sans-serif;line-height:1.45;color:#0f172a;">
+  <h2 style="color:#1e3a8a;margin:0 0 4px;">Johnson Church of Christ</h2>
+  <h3 style="margin:0 0 12px;">Contribution Summary</h3>
+  <p style="color:#475569;font-size:14px;margin:0 0 16px;">
+    Period: {html_escape(period)}{memo_html}<br>
+    {entry_count} contribution{'s' if entry_count != 1 else ''}
+    · {date_count} date{'s' if date_count != 1 else ''}
+  </p>
+  <table style="border-collapse:collapse;width:100%;max-width:720px;font-size:14px;" cellpadding="0" cellspacing="0">
+    <thead>
+      <tr>
+        <th style="border:1px solid #1e3a8a;background:#1e3a8a;color:#fff;padding:6px 8px;text-align:left;font-size:12px;">Date</th>
+        {th}
+      </tr>
+    </thead>
+    <tbody>
+      <tr style="background:#fffbeb;">{td_text("Period average", "font-weight:700;")}{avg_cells}</tr>
+      {''.join(row_html)}
+    </tbody>
+    <tfoot>
+      <tr style="background:#eff6ff;">{tot_cells}</tr>
+    </tfoot>
+  </table>
+  <p style="color:#64748b;font-size:12px;margin-top:14px;">
+    Period average is the column total divided by the number of dates with contributions.
+  </p>
+  <p style="color:#64748b;font-size:12px;">Johnson Church of Christ • Accounts Payable System</p>
+</body></html>"""
+    return subject, text, html
+
+
+def send_contribution_summary_report(date_from, date_to, memo, to_email=None):
+    to_email = (to_email or CONTRIBUTION_SUMMARY_EMAIL_TO).strip()
+    if not _EMAIL_RE.match(to_email):
+        return False, "A valid recipient email is required."
+    data = summary_report_data(date_from, date_to, memo)
+    if not data.get("rows"):
+        return False, "No contributions match these filters."
+    subject, text, html = build_contribution_summary_email(data)
+    status = send_email(to_email, subject, text, html)
+    if status == "failed":
+        return False, "Email failed to send. Check the Email Log for details."
+    if status == "simulated":
+        return True, f"Summary email simulated to {to_email}. See the Email Log."
+    return True, f"Summary email sent to {to_email}."
+
+
 @app.route("/api/contributors", methods=["GET", "POST"])
 def api_contributors():
     denied = require_admin_api()
@@ -4234,6 +4372,22 @@ def api_contribution_summary():
     date_to = (request.args.get("date_to") or "").strip()
     memo = (request.args.get("memo") or "").strip()
     return jsonify(summary_report_data(date_from, date_to, memo))
+
+
+@app.route("/api/contributions/reports/summary/email", methods=["POST"])
+def api_contribution_summary_email():
+    denied = require_admin_api()
+    if denied:
+        return denied
+    data = request.get_json(silent=True) or {}
+    date_from = (data.get("date_from") or request.args.get("date_from") or "").strip()
+    date_to = (data.get("date_to") or request.args.get("date_to") or "").strip()
+    memo = (data.get("memo") or request.args.get("memo") or "").strip()
+    to_email = (data.get("to_email") or CONTRIBUTION_SUMMARY_EMAIL_TO).strip()
+    ok, message = send_contribution_summary_report(date_from, date_to, memo, to_email)
+    if not ok:
+        return jsonify({"error": message}), 400
+    return jsonify({"success": True, "message": message, "to_email": to_email})
 
 
 @app.route("/api/contributions/letters")

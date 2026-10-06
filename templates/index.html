@@ -851,12 +851,13 @@
             </div>
             <div class="flex items-end gap-2">
               <button type="button" onclick="runSummaryReport()" class="px-4 py-2 bg-blue-800 text-white text-sm font-semibold rounded-lg">Run report</button>
-              <button type="button" onclick="printSummaryReport()" class="px-3 py-2 border border-slate-300 rounded-lg text-sm"><i class="fa-solid fa-print"></i></button>
+              <button type="button" onclick="printSummaryReport()" class="px-3 py-2 border border-slate-300 rounded-lg text-sm" title="Print summary"><i class="fa-solid fa-print"></i></button>
+              <button type="button" onclick="emailSummaryReport()" class="px-3 py-2 border border-slate-300 rounded-lg text-sm" title="Email this summary to darron.mitchell@hotmail.com"><i class="fa-solid fa-envelope"></i></button>
             </div>
           </div>
         </div>
         <div id="summary-report-wrap" class="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-sm">
-          <div class="p-6 text-sm text-slate-400">Choose a date range and click Run report.</div>
+          <div class="p-6 text-sm text-slate-400">Choose a date range and click Run report. Use the envelope to email that table to darron.mitchell@hotmail.com when you are done uploading the week.</div>
         </div>
       </div>
 
@@ -2928,6 +2929,7 @@
       await loadContributionEntries();
       let msg = data.message || 'Imported.';
       if (data.errors && data.errors.length) msg += '\n\n' + data.errors.slice(0, 8).join('\n');
+      msg += '\n\nWhen you are done, open Summary report, set the week\'s dates, and click the envelope to email the summary.';
       alert(msg);
     }
 
@@ -3002,6 +3004,22 @@
       if (dt) p.set('date_to', dt);
       if (memo) p.set('memo', memo);
       window.open('/contributions/summary/print?' + p.toString(), '_blank', 'noopener');
+    }
+    async function emailSummaryReport() {
+      const df = document.getElementById('summary-from').value;
+      const dt = document.getElementById('summary-to').value;
+      const memo = document.getElementById('summary-memo').value.trim();
+      const to = 'darron.mitchell@hotmail.com';
+      const period = (df || dt) ? ((df || 'beginning') + ' through ' + (dt || 'present')) : 'all dates';
+      if (!confirm('Email this contribution summary (' + period + ') to ' + to + '?')) return;
+      const res = await apiFetch('/api/contributions/reports/summary/email', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ date_from: df, date_to: dt, memo: memo, to_email: to })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) return alert(data.error || 'Could not send summary email');
+      alert(data.message || 'Summary email sent.');
     }
 
     function syncLetterAmountFields() {
