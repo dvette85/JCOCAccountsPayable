@@ -102,14 +102,17 @@
       gap: 6px;
     }
     .step-dot {
-      width: 22px;
+      min-width: 26px;
+      width: 26px;
       height: 22px;
       border-radius: 9999px;
-      display: flex;
+      display: inline-flex;
       align-items: center;
       justify-content: center;
-      font-size: 11px;
+      font-size: 9px;
       font-weight: 700;
+      letter-spacing: 0.02em;
+      cursor: help;
     }
     .step-dot.done { background: #166534; color: white; }
     .step-dot.current { background: #1e40af; color: white; }
@@ -1477,8 +1480,10 @@
             const isDone = step.approved || req.status === 'Approved';
             const isCurrent = req.status === 'Pending' && (req.current_step === step.step);
             const dotClass = isDone ? 'done' : (isCurrent ? 'current' : 'pending');
-            const label = step.name.split(' ')[0];
-            return `<span class="step-dot ${dotClass} text-[9px]">${label[0] || (idx+1)}</span>`;
+            const fullName = (step.name || '').trim();
+            const initials = nameInitials(fullName) || String(idx + 1);
+            const tip = escapeHtml(fullName || ('Approver ' + (idx + 1)));
+            return `<span class="step-dot ${dotClass}" title="${tip}" aria-label="${tip}">${escapeHtml(initials)}</span>`;
           }).join('<span class="mx-0.5 text-slate-300">→</span>');
         } else {
           progress = `<span class="text-xs text-slate-400">No approvers assigned</span>`;
@@ -2466,9 +2471,17 @@
     }
 
     function escapeHtml(str) {
-      return str.replace(/[&<>"']/g, function(m) {
+      return String(str == null ? '' : str).replace(/[&<>"']/g, function(m) {
         return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m];
       });
+    }
+
+    function nameInitials(name) {
+      const parts = String(name || '').trim().split(/\s+/).filter(Boolean);
+      if (!parts.length) return '';
+      const first = parts[0].charAt(0);
+      const last = parts.length > 1 ? parts[parts.length - 1].charAt(0) : '';
+      return (first + last).toUpperCase();
     }
 
     // ===== CONTRIBUTIONS =====
