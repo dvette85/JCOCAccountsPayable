@@ -857,7 +857,7 @@
           </div>
         </div>
         <div id="summary-report-wrap" class="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-sm">
-          <div class="p-6 text-sm text-slate-400">Choose a date range and click Run report. Use the envelope to email that table to darron.mitchell@hotmail.com when you are done uploading the week.</div>
+          <div class="p-6 text-sm text-slate-400">Loading year-to-date summary…</div>
         </div>
       </div>
 
@@ -2505,6 +2505,17 @@
       return y + '-' + m + '-' + day;
     }
 
+    function yearStartLocalISO() {
+      return new Date().getFullYear() + '-01-01';
+    }
+
+    function applySummaryYearToDate() {
+      const fromEl = document.getElementById('summary-from');
+      const toEl = document.getElementById('summary-to');
+      if (fromEl) fromEl.value = yearStartLocalISO();
+      if (toEl) toEl.value = todayLocalISO();
+    }
+
     function formatEntryDate(iso) {
       const s = String(iso || '').slice(0, 10);
       const m = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
@@ -2521,6 +2532,7 @@
       if (name === 'contributors') loadContributors();
       if (name === 'entries') { loadContributorOptions().then(loadContributionEntries); loadContributionMemos(); }
       if (name === 'template') loadLetterTemplate();
+      if (name === 'summary') { applySummaryYearToDate(); runSummaryReport(); }
       if (name === 'letters') { loadContributorOptions(); syncLetterAmountFields(); }
     }
 
